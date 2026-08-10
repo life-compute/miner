@@ -16,7 +16,7 @@ GPU scores molecules → results submitted on-chain → validators verify → $L
 
 1. The miner pulls the current target list from [life-compute/targets](https://github.com/life-compute/targets)
 2. Boltz2 predicts binding affinity for drug-like molecules against each target
-3. Hits (score ≤ threshold) are submitted to the Solana program (`3dYbT2egotmpGBoLZe2pytsraffxre7V5dySsTKgxYiC`)
+3. Hits (score ≤ threshold) are submitted to the Solana program (`3AZnjfvbLCpb1QkvaTYRTY2YafXT3vM32bmBBM3H8FdL`)
 4. Validators independently verify the structure prediction
 5. Your wallet receives 1 $LIFE per verified hit
 
@@ -87,7 +87,7 @@ miner_daemon.py
 
 ## On-chain program
 
-Program ID: `3dYbT2egotmpGBoLZe2pytsraffxre7V5dySsTKgxYiC`  
+Program ID: `3AZnjfvbLCpb1QkvaTYRTY2YafXT3vM32bmBBM3H8FdL`  
 Network: Solana devnet (mainnet-beta at launch)  
 Source: [life-compute/core](https://github.com/life-compute/core)
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 # ── Config ────────────────────────────────────────────────────────────────────
-PROGRAM_ID   = "3dYbT2egotmpGBoLZe2pytsraffxre7V5dySsTKgxYiC"
+PROGRAM_ID   = "3AZnjfvbLCpb1QkvaTYRTY2YafXT3vM32bmBBM3H8FdL"
 TARGETS_URL  = "https://raw.githubusercontent.com/life-compute/targets/main/targets.json"
 CONFIG_PATH  = Path.home() / ".life-compute" / "config.json"
 STATS_PATH   = Path("/app/stats.json") if Path("/app").exists() else Path("stats.json")
