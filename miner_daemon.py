@@ -70,7 +70,7 @@ IDL_PATH   = ANCHOR_DIR / "target/idl/life_core.json"
 # ── Boltz2 / nova paths ───────────────────────────────────────────────────────
 NOVA_DIR  = Path("/mnt/minos-drive/nova_subnet")
 NOVA_VENV = NOVA_DIR / ".venv" / "bin" / "python"
-MSA_DIR   = NOVA_DIR / "data" / "msa_files"
+MSA_DIR   = Path("/mnt/minos-drive/life-compute-miner/data/msa_files")
 
 logging.basicConfig(
     level=logging.INFO,
