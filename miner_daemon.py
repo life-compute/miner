@@ -296,6 +296,7 @@ def main():
     txs            : list             = []
     ref_compounds  : dict[str, str]   = {}
     epoch_screened : set[str]         = set()   # ref SMILES screened this epoch
+    ref_scores     : dict[str, float] = {}       # {target_id: ref_compound_affinity this epoch}
 
     # ── Adaptive state ─────────────────────────────────────────────────────────
     # epoch_start_time: when the current TARGET_REFRESH epoch started
@@ -351,6 +352,7 @@ def main():
             ref_compounds = fetch_reference_compounds()
             log.info(f"Reference compounds loaded: {len(ref_compounds)} ({', '.join(ref_compounds)})")
             epoch_screened.clear()   # new epoch — reset ref priority queue
+            ref_scores.clear()        # new epoch — reset relative thresholds
             epoch_start_time = now   # epoch clock restarts
             best_boltz_smiles.clear()  # reset refine seeds for new epoch
             for t in targets:
@@ -448,12 +450,23 @@ def main():
 
         boltz_score = result.get("boltz_score")
         affinity    = _boltz_score_to_affinity(boltz_score)
-        hit         = affinity is not None and affinity <= thresh
+
+        # Record reference compound score so we can use a relative threshold.
+        # If ref compound scores X, effective threshold = X - 1.0 kcal/mol.
+        if is_ref and affinity is not None:
+            ref_scores[tid] = affinity
+            log.info(
+                f"  [REF-SCORE] {tid} reference affinity: {affinity:.3f} kcal/mol  "
+                f"→ effective threshold this epoch: {affinity - 1.0:.3f} kcal/mol"
+            )
+
+        eff_thresh = ref_scores[tid] - 1.0 if tid in ref_scores else thresh
+        hit        = affinity is not None and affinity <= eff_thresh
         score_str   = f"{affinity:.3f} kcal/mol" if affinity is not None else "None (scoring failed)"
 
         log.info(
             f"  Boltz score: {boltz_score}  → affinity: {score_str}  "
-            f"({'✔ HIT' if hit else '✘ miss'})  {elapsed:.1f}s  "
+            f"({'✔ HIT' if hit else '✘ miss'})  thresh={eff_thresh:.3f}  {elapsed:.1f}s  "
             f"msa={result.get('msa_used', '?')}"
         )
 
