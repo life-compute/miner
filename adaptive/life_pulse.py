@@ -327,6 +327,7 @@ def run_sweep(
     max_configs: int = 200,
     family_filter: Optional[str] = None,
     verbose: bool = True,
+    max_attempts: int = 0,  # 0 → auto: max(max_configs * 50, 5000)
 ) -> None:
     """
     Sample max_configs molecules quasi-randomly from the vocab, score with
@@ -337,13 +338,30 @@ def run_sweep(
     max_configs   : Maximum molecules to evaluate this run.
     family_filter : If set (e.g. "kinase"), restrict to that family only.
     verbose       : Print progress line when done.
+    max_attempts  : Hard iteration cap to prevent infinite loops when the
+                    vocabulary is exhausted (many scaffold+rgroup combos
+                    collapse to the same canonical SMILES via RDKit, making
+                    the effective unique space much smaller than the nominal
+                    product of scaffolds × R-groups).  0 = auto-compute as
+                    max(max_configs * 50, 5000).
     """
     state     = _load_state()
     seen      = state["seen"]
     idx       = state["next_index"]
     evaluated = 0
+    _max_attempts = max_attempts if max_attempts > 0 else max(max_configs * 50, 5000)
+    _attempts     = 0
 
     while evaluated < max_configs:
+        _attempts += 1
+        if _attempts > _max_attempts:
+            if verbose:
+                print(
+                    f"[PULSE] sweep capped at {_max_attempts} iterations "
+                    f"(evaluated={evaluated}/{max_configs}) — "
+                    f"vocab likely exhausted (seen={len(seen)}); stopping."
+                )
+            break
         # Quasi-random family pick
         fam_f = sobol_float(idx, 0)
         if family_filter and family_filter in FAMILY_VOCAB:
