@@ -117,6 +117,27 @@ def _msa_path_for(uniprot_id: str) -> str:
     return str(path) if path.exists() else "empty"
 
 
+def _sequence_from_msa(msa_path: str) -> str | None:
+    """Extract the query sequence from the first non-header line of an a3m file.
+
+    Mirrors nova_pulse_scorer._get_protein_sequence() — ensures the sequence
+    passed to Boltz2 exactly matches the MSA query, preventing the
+    sequence-length mismatch crash that makes predict() exit in ~7s with None.
+    Returns None if msa_path is 'empty' or file is unreadable.
+    """
+    if msa_path == "empty":
+        return None
+    try:
+        with open(msa_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and not line.startswith(">"):
+                    return line
+    except OSError as e:
+        log.warning(f"Could not read MSA {msa_path}: {e}")
+    return None
+
+
 def run_boltz2_scoring(smiles: str, target: dict) -> dict:
     """
     Real Boltz2 GPU inference via nova_pulse_scorer.score_batch().
@@ -125,8 +146,22 @@ def run_boltz2_scoring(smiles: str, target: dict) -> dict:
     """
     uniprot   = target["uniprot_id"]
     target_id = target["id"]
-    sequence  = target["protein_sequence"]
     msa_path  = _msa_path_for(uniprot)
+
+    # CRITICAL: sequence must match the MSA query line exactly.
+    # targets.json has truncated sequences (TP53=227aa vs canonical 393aa);
+    # the MSA file is built from the canonical sequence.  Mismatch → Boltz2
+    # crashes immediately (~7s) and returns None without running GPU inference.
+    # Mirror nova_pulse_scorer's pattern: read sequence from MSA when available.
+    sequence = _sequence_from_msa(msa_path) or target["protein_sequence"]
+    if msa_path != "empty":
+        msa_len = len(sequence)
+        tgt_len = len(target.get("protein_sequence", ""))
+        if msa_len != tgt_len:
+            log.info(
+                f"  [MSA] Using sequence from {Path(msa_path).name} "
+                f"({msa_len} aa) instead of targets.json ({tgt_len} aa)"
+            )
 
     helper_src = _BOLTZ_HELPER.format(nova_dir=str(NOVA_DIR))
     args_json  = json.dumps({
