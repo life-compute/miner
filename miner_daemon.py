@@ -30,6 +30,7 @@ SOLANA_RPC    = _env("SOLANA_RPC",    "https://api.devnet.solana.com")
 AUTH_KEYPAIR  = _env("SOLANA_KEYPAIR","/mnt/minos-drive/life-compute-miner/dev-keypair.json")
 MINER_KEYPAIR = _env("MINER_KEYPAIR", "/mnt/minos-drive/life-compute-miner/miner-keypair.json")
 TARGETS_URL   = _env("TARGETS_URL",   "https://raw.githubusercontent.com/life-compute/targets/master/targets.json")
+REF_COMPOUNDS_URL = _env("REF_COMPOUNDS_URL", "https://raw.githubusercontent.com/life-compute/targets/master/reference_compounds.json")
 POLL_SECONDS  = int(_env("POLL_SECONDS", "60"))
 TARGET_REFRESH = 300
 
@@ -198,6 +199,17 @@ def fetch_targets() -> list:
         log.warning(f"fetch_targets failed: {e}")
         return []
 
+
+def fetch_reference_compounds() -> dict[str, str]:
+    """Return {target_id: smiles} for each reference compound. Falls back to {} on error."""
+    try:
+        with urllib.request.urlopen(REF_COMPOUNDS_URL, timeout=15) as r:
+            data = json.loads(r.read())
+        return {c["target_id"]: c["smiles"] for c in data.get("compounds", [])}
+    except Exception as e:
+        log.warning(f"fetch_reference_compounds failed: {e}")
+        return {}
+
 SCAFFOLDS = [
     "CC(=O)Nc1ccc(cc1)O",
     "c1ccc(cc1)CN2CCN(CC2)c3ncccn3",
@@ -209,8 +221,19 @@ SCAFFOLDS = [
     "CC1=CC=C(C=C1)S(=O)(=O)Nc1ccccc1",
 ]
 
-def sample_molecule() -> str:
-    return random.choice(SCAFFOLDS)
+def sample_molecule(target_id: str | None = None,
+                    ref_compounds: dict[str, str] | None = None,
+                    screened: set[str] | None = None) -> tuple[str, bool]:
+    """Return (smiles, is_reference).
+
+    Priority: reference compound for this target (if not yet screened this epoch)
+    → random scaffold fallback.
+    """
+    if target_id and ref_compounds:
+        ref = ref_compounds.get(target_id)
+        if ref and (screened is None or ref not in screened):
+            return ref, True
+    return random.choice(SCAFFOLDS), False
 
 def write_stats(stats: dict):
     STATS_PATH.write_text(json.dumps(stats, indent=2))
@@ -238,6 +261,8 @@ def main():
     molecules_done = 0
     life_earned    = 0.0
     txs            = []
+    ref_compounds  : dict[str, str] = {}
+    epoch_screened : set[str]       = set()   # ref SMILES screened this epoch
 
     stats = {
         "molecules_screened": 0, "life_earned": 0.0,
@@ -259,6 +284,9 @@ def main():
                 log.warning("No targets — retrying in 30s")
                 time.sleep(30)
                 continue
+            ref_compounds = fetch_reference_compounds()
+            log.info(f"Reference compounds loaded: {len(ref_compounds)} ({', '.join(ref_compounds)})")
+            epoch_screened.clear()   # new epoch — reset priority queue
             for t in targets:
                 uid  = t["uniprot_id"]
                 msa  = _msa_path_for(uid)
@@ -274,7 +302,9 @@ def main():
         target = random.choice(eligible)
         tid    = target["id"]
         thresh = target.get("target_score_threshold", -7.0)
-        mol    = sample_molecule()
+        mol, is_ref = sample_molecule(tid, ref_compounds, epoch_screened)
+        if is_ref:
+            epoch_screened.add(mol)
         uid    = target["uniprot_id"]
         msa    = _msa_path_for(uid)
 
@@ -282,7 +312,7 @@ def main():
             f"Target: {tid} ({uid}) | tier {target['difficulty_tier']} "
             f"| threshold {thresh} | MSA: {'local' if msa != 'empty' else 'empty'}"
         )
-        log.info(f"Molecule: {mol}")
+        log.info(f"Molecule: {mol}  [{'REF: ' + target.get('id','') if is_ref else 'random scaffold'}]")
         log.info("Running Boltz2 GPU scoring...")
 
         t0      = time.time()
