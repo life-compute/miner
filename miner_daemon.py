@@ -309,8 +309,19 @@ def main():
     # seed pulse with a quick initial sweep so there's something in the queue
     if _ADAPTIVE_AVAILABLE:
         try:
-            log.info("[ADAPTIVE] Seeding life_pulse with initial 100-config sweep ...")
-            run_sweep(max_configs=100, verbose=True)
+            _pulse_jsonl = Path(__file__).parent / "output" / "life_pulse_data.jsonl"
+            _existing_rows = sum(1 for _ in _pulse_jsonl.open()) if _pulse_jsonl.exists() else 0
+            if _existing_rows >= 20:
+                log.info(f"[ADAPTIVE] life_pulse already has {_existing_rows} rows — skipping seed sweep.")
+            else:
+                log.info("[ADAPTIVE] Seeding life_pulse with initial 100-config sweep (background) ...")
+                import threading as _threading
+                def _bg_seed():
+                    try:
+                        run_sweep(max_configs=100, verbose=True)
+                    except Exception as _se:
+                        log.warning(f"[ADAPTIVE] Background pulse sweep failed (non-fatal): {_se}")
+                _threading.Thread(target=_bg_seed, daemon=True, name="pulse-seed").start()
         except Exception as _se:
             log.warning(f"[ADAPTIVE] Initial pulse sweep failed (non-fatal): {_se}")
 

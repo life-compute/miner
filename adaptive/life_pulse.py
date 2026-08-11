@@ -203,6 +203,9 @@ def _decorate(scaffold_smiles: str, rgroup_idx: int) -> str:
     try:
         from rdkit import Chem
         from rdkit.Chem import AllChem
+    except ImportError:
+        return scaffold_smiles
+    try:
         mol = Chem.MolFromSmiles(scaffold_smiles)
         if mol is None:
             return scaffold_smiles
@@ -231,12 +234,18 @@ def _decorate(scaffold_smiles: str, rgroup_idx: int) -> str:
 
 def _canonical(smiles: str) -> Optional[str]:
     """Return RDKit canonical SMILES or None if unparseable."""
+    if not smiles:
+        return None
     try:
         from rdkit import Chem
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             return None
         return Chem.MolToSmiles(mol)
+    except ImportError:
+        # rdkit not installed — return raw SMILES (best-effort; proxy_score will
+        # also run without rdkit and return a default value)
+        return smiles
     except Exception:
         return None
 
@@ -252,6 +261,11 @@ def proxy_score(smiles: str) -> float:
     try:
         from rdkit import Chem
         from rdkit.Chem import Descriptors
+    except ImportError:
+        # rdkit not installed — return a uniform mid-range proxy so molecules
+        # still enter the candidate queue (Boltz2 scoring is the real filter)
+        return 0.5 if smiles else 0.0
+    try:
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             return 0.0
