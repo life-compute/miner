@@ -4,10 +4,22 @@ LIFE Compute — Miner Daemon (devnet, real on-chain submission)
 
 Pipeline each cycle:
   1. Fetch cancer targets from GitHub
-  2. Pick target + sample molecule
-  3. Run Boltz2 GPU scoring via nova_pulse_scorer pattern
-  4. If score ≤ threshold → submit_result on-chain via Node.js / Anchor
-  5. Write stats.json for dashboard
+  2. Detect protein family → route via life_scout
+  3. ALWAYS screen reference compounds first (per target, once per epoch)
+  4. Three-phase epoch within each TARGET_REFRESH window:
+       Phase 1 (first 20%): broad Sobol exploration via life_pulse
+       Phase 2 (60%):       ART pre-filter top 25% → Boltz2 score
+       Phase 3 (20%):       fine-tune around best scoring molecules
+  5. Run Boltz2 GPU scoring via nova_pulse_scorer pattern
+  6. If score ≤ threshold → submit_result on-chain via Node.js / Anchor
+  7. Write stats.json for dashboard
+  8. Auto-retrain life_art after every RETRAIN_EVERY new Boltz2 scores
+
+Adaptive stack (adaptive/):
+  life_pulse     — Sobol sweep over ZINC15/SAVI molecular vocabulary
+  life_art       — RandomForest on Morgan FP + physchem → affinity prediction
+  life_scout     — protein-family-aware candidate routing
+  life_diversity — Shannon entropy enforcement + Tanimoto deduplication
 
 Submission uses the proven Node.js stack from E2E tests rather than
 the uninstalled anchorpy, because this machine has Anchor node_modules.
@@ -20,6 +32,22 @@ Boltz2 scoring mirrors nova_adaptive/nova_pulse_scorer.py:
 import json, time, random, logging, os, subprocess, sys, urllib.request, tempfile
 from pathlib import Path
 from datetime import datetime, timezone
+
+# ── Adaptive stack (wire in; graceful fallback if rdkit not on PATH) ──────────
+sys.path.insert(0, str(Path(__file__).parent))   # ensure adaptive/ importable
+try:
+    from adaptive.life_pulse     import (run_sweep, get_next_candidates,
+                                         proxy_score, record_boltz_score)
+    from adaptive.life_art       import (train as art_train, rank_candidates,
+                                         load_model, should_retrain,
+                                         RETRAIN_EVERY)
+    from adaptive.life_scout     import (get_focused_candidates,
+                                         detect_protein_family)
+    from adaptive.life_diversity import SubmissionMemory, greedy_diverse_select
+    _ADAPTIVE_AVAILABLE = True
+except Exception as _e:
+    _ADAPTIVE_AVAILABLE = False
+    _e_msg = str(_e)
 
 # ── Config from .env ──────────────────────────────────────────────────────────
 def _env(key, default=""):
@@ -242,11 +270,16 @@ def write_stats(stats: dict):
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     log.info("═" * 60)
-    log.info("  LIFE Compute Miner — devnet  (Boltz2 GPU scorer)")
+    log.info("  LIFE Compute Miner — devnet  (Boltz2 GPU scorer + Adaptive Stack)")
     log.info(f"  Program : {PROGRAM_ID}")
     log.info(f"  RPC     : {SOLANA_RPC}")
     log.info(f"  Miner KP: {MINER_KEYPAIR}")
     log.info(f"  Nova venv: {NOVA_VENV}")
+    if _ADAPTIVE_AVAILABLE:
+        log.info("  Adaptive: life_pulse / life_art / life_scout / life_diversity ✓")
+    else:
+        log.warning(f"  Adaptive: NOT available ({_e_msg if '_e_msg' in dir() else 'import failed'}) "
+                    "— falling back to random scaffold sampling")
     log.info("═" * 60)
 
     if not ANCHOR_DIR.exists() or not IDL_PATH.exists():
@@ -256,17 +289,36 @@ def main():
         log.error(f"Nova venv missing: {NOVA_VENV}")
         sys.exit(1)
 
-    targets        = []
-    last_refresh   = 0
-    molecules_done = 0
-    life_earned    = 0.0
-    txs            = []
-    ref_compounds  : dict[str, str] = {}
-    epoch_screened : set[str]       = set()   # ref SMILES screened this epoch
+    targets        : list             = []
+    last_refresh   : float            = 0.0
+    molecules_done : int              = 0
+    life_earned    : float            = 0.0
+    txs            : list             = []
+    ref_compounds  : dict[str, str]   = {}
+    epoch_screened : set[str]         = set()   # ref SMILES screened this epoch
+
+    # ── Adaptive state ─────────────────────────────────────────────────────────
+    # epoch_start_time: when the current TARGET_REFRESH epoch started
+    # best_boltz_smiles: top-scoring SMILES from prior rounds (for Phase 3 refine)
+    # art_model: in-process ART model handle (reload triggers on retrain)
+    # sub_memory: cross-restart deduplication memory
+    epoch_start_time: float        = 0.0
+    best_boltz_smiles: list[str]   = []          # updated after each real Boltz score
+    art_model                      = None
+    sub_memory                     = SubmissionMemory() if _ADAPTIVE_AVAILABLE else None
+    # seed pulse with a quick initial sweep so there's something in the queue
+    if _ADAPTIVE_AVAILABLE:
+        try:
+            log.info("[ADAPTIVE] Seeding life_pulse with initial 100-config sweep ...")
+            run_sweep(max_configs=100, verbose=True)
+        except Exception as _se:
+            log.warning(f"[ADAPTIVE] Initial pulse sweep failed (non-fatal): {_se}")
 
     stats = {
         "molecules_screened": 0, "life_earned": 0.0,
         "targets_contributed": [], "transactions": [],
+        "adaptive": {"available": _ADAPTIVE_AVAILABLE, "art_ready": False,
+                     "boltz_scores_accumulated": 0, "phase": "explore"},
         "global": {"total_miners": 412, "molecules_global": 1_847_392, "targets_solved": 2},
         "started_at": datetime.now(timezone.utc).isoformat(), "last_updated": "",
     }
@@ -277,6 +329,7 @@ def main():
     while True:
         now = time.time()
 
+        # ── Target / epoch refresh ─────────────────────────────────────────────
         if now - last_refresh > TARGET_REFRESH or not targets:
             log.info(f"Fetching targets from {TARGETS_URL}...")
             targets = fetch_targets()
@@ -286,7 +339,9 @@ def main():
                 continue
             ref_compounds = fetch_reference_compounds()
             log.info(f"Reference compounds loaded: {len(ref_compounds)} ({', '.join(ref_compounds)})")
-            epoch_screened.clear()   # new epoch — reset priority queue
+            epoch_screened.clear()   # new epoch — reset ref priority queue
+            epoch_start_time = now   # epoch clock restarts
+            best_boltz_smiles.clear()  # reset refine seeds for new epoch
             for t in targets:
                 uid  = t["uniprot_id"]
                 msa  = _msa_path_for(uid)
@@ -302,17 +357,78 @@ def main():
         target = random.choice(eligible)
         tid    = target["id"]
         thresh = target.get("target_score_threshold", -7.0)
-        mol, is_ref = sample_molecule(tid, ref_compounds, epoch_screened)
-        if is_ref:
-            epoch_screened.add(mol)
         uid    = target["uniprot_id"]
         msa    = _msa_path_for(uid)
 
+        # ── PHASE SELECTION ───────────────────────────────────────────────────
+        # Epoch window = TARGET_REFRESH seconds.
+        # Phase 1 (first 20%): broad Sobol exploration via life_pulse
+        # Phase 2 (60%):       ART pre-filter top 25% → Boltz2
+        # Phase 3 (last 20%):  fine-tune around best scoring molecules
+        epoch_frac  = min(1.0, (now - epoch_start_time) / max(TARGET_REFRESH, 1))
+        if epoch_frac < 0.20:
+            adaptive_phase = "explore"
+        elif epoch_frac < 0.80:
+            adaptive_phase = "exploit"
+        else:
+            adaptive_phase = "refine"
+
+        # ── MOLECULE SELECTION ────────────────────────────────────────────────
+        # Priority 1: reference compound for this target (if not yet screened)
+        ref_smi = ref_compounds.get(tid) if ref_compounds else None
+        if ref_smi and ref_smi not in epoch_screened:
+            mol    = ref_smi
+            is_ref = True
+            epoch_screened.add(ref_smi)
+            log.info(f"[REF] Screening reference compound for {tid}: {mol[:50]}")
+
+        elif _ADAPTIVE_AVAILABLE:
+            # Adaptive stack: get focused, ART-ranked, diversity-filtered candidates
+            try:
+                family = detect_protein_family(uid, target.get("protein_sequence", ""))
+                cands, scout_diag = get_focused_candidates(
+                    target=target,
+                    n=1,
+                    phase=adaptive_phase,
+                    best_smiles=best_boltz_smiles[-10:],
+                    art_model=art_model,
+                )
+                # novelty filter vs submission memory
+                if cands and sub_memory is not None:
+                    novel_cands = sub_memory.filter_novel(cands)
+                    cands = novel_cands if novel_cands else cands  # fallback if all seen
+                if cands:
+                    _, mol, pred_score = cands[0]
+                    is_ref = False
+                    log.info(
+                        f"[ADAPTIVE] phase={adaptive_phase}  family={family}  "
+                        f"predicted_score={pred_score:.4f}  "
+                        f"passed_filter={scout_diag.get('n_passed_filter', '?')}  "
+                        f"diverse={scout_diag.get('n_diverse', '?')}"
+                    )
+                else:
+                    # Scout returned nothing — pulse seed + random fallback
+                    log.warning("[ADAPTIVE] Scout returned no candidates — running pulse seed")
+                    run_sweep(max_configs=50, verbose=False)
+                    mol    = random.choice(SCAFFOLDS)
+                    is_ref = False
+            except Exception as _ae:
+                log.warning(f"[ADAPTIVE] scout failed ({_ae}) — random scaffold fallback")
+                mol    = random.choice(SCAFFOLDS)
+                is_ref = False
+
+        else:
+            # Fallback: original random scaffold sampling
+            mol, is_ref = sample_molecule(tid, ref_compounds, epoch_screened)
+            if is_ref:
+                epoch_screened.add(mol)
+
         log.info(
-            f"Target: {tid} ({uid}) | tier {target['difficulty_tier']} "
-            f"| threshold {thresh} | MSA: {'local' if msa != 'empty' else 'empty'}"
+            f"Target: {tid} ({uid}) | tier {target.get('difficulty_tier','?')} "
+            f"| threshold {thresh} | MSA: {'local' if msa != 'empty' else 'empty'} "
+            f"| epoch {epoch_frac*100:.0f}% [{adaptive_phase}]"
         )
-        log.info(f"Molecule: {mol}  [{'REF: ' + target.get('id','') if is_ref else 'random scaffold'}]")
+        log.info(f"Molecule: {mol[:80]}  [{'REF' if is_ref else adaptive_phase}]")
         log.info("Running Boltz2 GPU scoring...")
 
         t0      = time.time()
@@ -330,6 +446,41 @@ def main():
             f"msa={result.get('msa_used', '?')}"
         )
 
+        # ── Record Boltz score in adaptive stack ──────────────────────────────
+        if _ADAPTIVE_AVAILABLE and boltz_score is not None:
+            try:
+                record_boltz_score(mol, boltz_score, tid)
+                # Track best molecules for Phase 3 refine seeds
+                best_boltz_smiles.append(mol)
+                best_boltz_smiles.sort(
+                    key=lambda s: s == mol,   # crude: newest at end
+                    reverse=False,
+                )
+                best_boltz_smiles = best_boltz_smiles[-50:]  # keep last 50
+                # Record in submission memory
+                if sub_memory is not None:
+                    sub_memory.mark_submitted(mol, boltz_score)
+                # Auto-retrain ART every RETRAIN_EVERY new scores
+                if should_retrain():
+                    log.info(f"[ART] {RETRAIN_EVERY} new scores accumulated — retraining ...")
+                    try:
+                        report = art_train()
+                        if report.get("ready"):
+                            art_model = load_model()   # reload in-process
+                            log.info(f"[ART] deployed  n={report['n_rows']}  R²={report.get('r2')}")
+                            stats["adaptive"]["art_ready"] = True
+                        else:
+                            log.info(f"[ART] not ready yet: {report.get('reason')}")
+                    except Exception as _re:
+                        log.warning(f"[ART] retrain failed (non-fatal): {_re}")
+                from adaptive.life_art import count_boltz_scores
+                stats["adaptive"]["boltz_scores_accumulated"] = count_boltz_scores()
+            except Exception as _be:
+                log.warning(f"[ADAPTIVE] score recording failed (non-fatal): {_be}")
+
+        stats["adaptive"]["phase"] = adaptive_phase
+
+        # ── On-chain submission ───────────────────────────────────────────────
         tx_sig = None
         if hit and affinity is not None and tid in TARGET_ID_MAP:
             log.info(f"  HIT — submitting to devnet program {PROGRAM_ID}...")
