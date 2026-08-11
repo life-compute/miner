@@ -10,3 +10,9 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# Runtime keypairs — never commit
+*-keypair.json
+dev-keypair.json
+miner-keypair.json
+# Runtime state
+stats.json
