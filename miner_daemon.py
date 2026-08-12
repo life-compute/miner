@@ -304,18 +304,8 @@ def write_stats(stats: dict):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    log.info("═" * 60)
-    log.info("  LIFE Compute Miner — devnet  (Boltz2 GPU scorer + Adaptive Stack)")
-    log.info(f"  Program : {PROGRAM_ID}")
-    log.info(f"  RPC     : {SOLANA_RPC}")
-    log.info(f"  Miner KP: {MINER_KEYPAIR}")
-    log.info(f"  Nova venv: {NOVA_VENV}")
-    if _ADAPTIVE_AVAILABLE:
-        log.info("  Adaptive: life_pulse / life_art / life_scout / life_diversity ✓")
-    else:
-        log.warning(f"  Adaptive: NOT available ({_e_msg if '_e_msg' in dir() else 'import failed'}) "
-                    "— falling back to random scaffold sampling")
-    log.info("═" * 60)
+    print("\033[92m    L I F E  C O M P U T E  \033[0m")
+    print()
 
     if not ANCHOR_DIR.exists() or not IDL_PATH.exists():
         log.error(f"Anchor dir missing: {ANCHOR_DIR}")
