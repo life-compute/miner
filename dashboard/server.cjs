@@ -82,6 +82,39 @@ function readJson(filePath) {
   catch { return null; }
 }
 
+/* ── Miner alive detection (robust — does not rely on stats.json "alive" field) ─
+ *
+ * Priority:
+ *  1. stats.json "last_updated" freshness — daemon writes every POLL_SECONDS (60s).
+ *     If written within the last 5 min, daemon is running.
+ *  2. life_boltz_scores.jsonl file mtime — Boltz2 appends a row each scoring cycle.
+ *     If modified within the last 5 min, miner is actively scoring.
+ *  3. Fallback: stored "alive" flag (may be absent if stats.json was reset from template).
+ *
+ * Background: stats.json.template omits the "alive" key. If the template overwrites
+ * stats.json (install/reset), the field disappears and the dashboard shows OFFLINE even
+ * while the daemon is running. Freshness checks are immune to this.
+ */
+const ALIVE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const BOLTZ_FILE      = path.join(OUT, 'life_boltz_scores.jsonl');
+
+function isMinerAlive(s) {
+  // 1. stats.json last_updated freshness
+  if (s.last_updated) {
+    try {
+      const age = Date.now() - new Date(s.last_updated).getTime();
+      if (age >= 0 && age < ALIVE_WINDOW_MS) return true;
+    } catch { /* malformed date — fall through */ }
+  }
+  // 2. life_boltz_scores.jsonl file mtime
+  try {
+    const mtime = fs.statSync(BOLTZ_FILE).mtimeMs;
+    if ((Date.now() - mtime) < ALIVE_WINDOW_MS) return true;
+  } catch { /* file doesn't exist yet — fall through */ }
+  // 3. Stored flag (fallback — may be absent)
+  return s.alive ?? false;
+}
+
 /* ── /stats — PUBLIC data ────────────────────────────────────────── */
 function buildPublicStats() {
   const s         = readJson(STATS) || {};
@@ -117,7 +150,7 @@ function buildPublicStats() {
   };
 
   return {
-    alive:               s.alive               ?? false,
+    alive:               isMinerAlive(s),
     current_target:      s.current_target      ?? '—',
     miner_id:            getMinerPubkey(),
     molecules_screened:  s.molecules_screened  ?? 0,
