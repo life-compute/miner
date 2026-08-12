@@ -51,11 +51,11 @@ irm https://raw.githubusercontent.com/life-compute/miner/main/install.ps1 | iex
 GPU scores molecules → results submitted on-chain → validators verify → $LIFE minted
 ```
 
-1. The miner pulls the current target list from **[life-compute/targets](https://github.com/life-compute/targets)** — 10 validated cancer proteins (TP53, BRCA1, EGFR, HER2, KRAS, BCL2, CDK4, VEGFR2, PDL1, MDM2)
+1. The miner pulls the current target list from **[life-compute/targets](https://github.com/life-compute/targets)** — 20 validated cancer proteins (TP53, BRCA1, EGFR, HER2, KRAS, BCL2, CDK4, VEGFR2, PDL1, MDM2, MET, FGFR1, PIK3CA, mTOR, PTEN, BRAF, AR, STAT3, RET, CDK6)
 2. Boltz2 GPU inference predicts binding affinity for drug-like molecules against each target
 3. Hits (predicted binding score ≤ threshold) are submitted to the Solana program on-chain
 4. Validators independently verify the structure prediction
-5. Your wallet receives 1 $LIFE per verified hit
+5. Your wallet receives $LIFE per verified hit (amount depends on target difficulty and halving schedule)
 
 Read the full vision in **[WHITEPAPER.md](https://github.com/life-compute/miner/blob/main/WHITEPAPER.md)**.
 

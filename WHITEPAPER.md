@@ -26,6 +26,10 @@ LIFE Compute addresses two urgent problems simultaneously: the computational bot
 1. [The Problem](#1-the-problem)
 2. [The Solution: LIFE Compute](#2-the-solution-life-compute)
 3. [The $LIFE Token](#3-the-life-token)
+   - 3.1 Token Economics
+   - 3.2 Mining Rewards
+   - 3.3 Why This Model Works
+   - 3.4 Two-Layer Halving Schedule
 4. [Cancer Target Portfolio](#4-cancer-target-portfolio)
 5. [Technical Architecture](#5-technical-architecture)
 6. [Getting Started — Three Steps](#6-getting-started--three-steps)
@@ -66,7 +70,7 @@ LIFE Compute solves both problems with a single, elegant mechanism: reward GPU o
 3. Boltz2 runs locally on the miner's GPU, scoring molecule candidates against the target protein
 4. High-affinity molecule candidates are submitted to the Solana program
 5. Validators verify the Boltz2 scores are genuine
-6. $LIFE tokens are minted directly to the miner's wallet
+6. $LIFE tokens are minted directly to the miner's wallet — subject to the halving schedule
 7. Results are stored publicly on-chain and in the `life-compute/targets` repository
 
 ### 2.2 Scientific Validity
@@ -94,9 +98,9 @@ $LIFE is a **proof-of-useful-work** cryptocurrency. It cannot be purchased in an
 
 ### 3.2 Mining Rewards
 
-Rewards scale with the scientific difficulty of the target, incentivizing miners to focus compute on the hardest, most important problems:
+Rewards scale with the scientific difficulty of the target, incentivizing miners to focus compute on the hardest, most important problems. All rewards are subject to the two-layer halving schedule (see Section 3.4):
 
-| Difficulty | Reward | Description |
+| Difficulty | Base Reward | Description |
 |-----------|--------|-------------|
 | Easy | 1 $LIFE | Well-characterized binding pocket |
 | Medium | 5 $LIFE | Partial structural data available |
@@ -109,11 +113,39 @@ Every $LIFE token represents real scientific work. As the total supply is distri
 
 Unlike proof-of-work mining where difficulty increases arbitrarily, LIFE Compute's difficulty is intrinsic — it reflects the genuine scientific challenge of finding high-affinity molecules for specific cancer proteins. The network gets harder to mine in exactly the ways that advance science.
 
+### 3.4 Two-Layer Halving Schedule
+
+LIFE Compute uses a two-layer halving mechanism to ensure long-term token scarcity and to distribute rewards fairly as targets mature. Both multipliers apply simultaneously.
+
+**Layer 1 — Supply Milestones** (based on total $LIFE minted network-wide):
+
+| LIFE Mined (Cumulative) | Reward Multiplier |
+|------------------------|-------------------|
+| 0 – 5,250,000 LIFE | 100% of base reward |
+| 5,250,001 – 10,500,000 LIFE | 50% of base reward |
+| 10,500,001 – 15,750,000 LIFE | 25% of base reward |
+| 15,750,001 – 21,000,000 LIFE | 12.5% of base reward |
+
+**Layer 2 — Target Hit Count** (based on confirmed submissions per individual target):
+
+| Verified Hits on Target | Reward Multiplier |
+|------------------------|-------------------|
+| 0 – 99 hits | 100% of tier reward |
+| 100 – 999 hits | 75% of tier reward |
+| 1,000+ hits | 50% of tier reward |
+
+**Combined example:** A Hard target (25 $LIFE base) at supply milestone 2 (50%) with 150 verified hits (75%):
+> 25 × 0.50 × 0.75 = **9.375 $LIFE per confirmed hit**
+
+This design means early miners on fresh targets earn the most, creating a competitive incentive to discover binding molecules for newly added cancer proteins. As a target is well-explored and the network matures, rewards reduce naturally — mirroring how scientific value concentrates at the frontier.
+
 ---
 
 ## 4. Cancer Target Portfolio
 
-LIFE Compute launches with ten validated cancer protein targets, curated from the most clinically significant and computationally tractable proteins in the oncology literature:
+LIFE Compute launches with **twenty** validated cancer protein targets, curated from the most clinically significant and computationally tractable proteins in the oncology literature. The portfolio has been expanded from the initial ten to cover a broader range of cancer types and therapeutic mechanisms.
+
+### Original 10 Targets
 
 | Target | UniProt | Cancer Type | Significance | Tier |
 |--------|---------|-------------|--------------|------|
@@ -124,9 +156,24 @@ LIFE Compute launches with ten validated cancer protein targets, curated from th
 | **KRAS** | P01116 | Pancreatic/Lung | Undruggable for decades, mutated in 85% pancreatic | Hard (25 $LIFE) |
 | **BCL2** | P10415 | Lymphoma/Leukemia | Apoptosis regulator, validated venetoclax target | Medium (5 $LIFE) |
 | **CDK4** | P11802 | Multiple | Cell cycle driver, palbociclib target | Easy (1 $LIFE) |
-| **VEGFR** | P35968 | Angiogenesis | Tumor blood vessel formation, bevacizumab target | Easy (1 $LIFE) |
+| **VEGFR2** | P35968 | Angiogenesis | Tumor blood vessel formation, bevacizumab target | Easy (1 $LIFE) |
 | **PD-L1** | Q9NZQ7 | Immunotherapy | Checkpoint inhibitor, atezolizumab/durvalumab target | Medium (5 $LIFE) |
 | **MDM2** | Q00987 | Pan-cancer | p53 suppressor, amplified in 7% of all cancers | Medium (5 $LIFE) |
+
+### 10 New Targets
+
+| Target | UniProt | Cancer Type | Significance | Tier |
+|--------|---------|-------------|--------------|------|
+| **MET** | P08581 | Lung/Gastric | RTK amplified in 3–4% of all NSCLC; crizotinib target | Medium (5 $LIFE) |
+| **FGFR1** | P11362 | Bladder/Lung | FGFR1 amplification in 20% of squamous lung cancer | Medium (5 $LIFE) |
+| **PIK3CA** | P42336 | Breast/Colorectal | Most commonly mutated PI3K isoform; alpelisib target | Hard (25 $LIFE) |
+| **mTOR** | P42345 | Kidney/Breast | Central growth/metabolism node; everolimus target | Medium (5 $LIFE) |
+| **PTEN** | P60484 | Glioblastoma/Prostate | Tumor suppressor lost in 30% of glioblastomas | Hard (25 $LIFE) |
+| **BRAF** | P15056 | Melanoma/Colorectal | V600E driver in 50% of melanoma; vemurafenib target | Hard (25 $LIFE) |
+| **AR** | P10275 | Prostate | Androgen receptor; enzalutamide/abiraterone target | Medium (5 $LIFE) |
+| **STAT3** | P40763 | AML/Lymphoma | Transcription factor; oncogenic in 70% of solid tumors | Hard (25 $LIFE) |
+| **RET** | P07949 | Thyroid/Lung | RET fusions in papillary thyroid & NSCLC; selpercatinib target | Medium (5 $LIFE) |
+| **CDK6** | Q16288 | Breast/Lymphoma | Partners CDK4; palbociclib/ribociclib/abemaciclib target | Easy (1 $LIFE) |
 
 ---
 
@@ -136,14 +183,16 @@ LIFE Compute launches with ten validated cancer protein targets, curated from th
 
 The LIFE Compute smart contract is written in Rust using the Anchor framework and deployed on Solana. The program manages six state accounts:
 
-- `NetworkState` — global configuration, total $LIFE minted, epoch parameters
-- `TargetAccount` — per-protein target data, current best score, weekly winner
+- `NetworkConfig` — global configuration, total $LIFE minted, epoch parameters, halving state
+- `TargetAccount` — per-protein target data, current best score, weekly winner, confirmed hit count
 - `MinerAccount` — per-miner statistics, total $LIFE earned, submission history
 - `JobAccount` — active job assignments linking miners to targets
 - `SubmissionAccount` — individual molecule submission with Boltz2 score
 - `ValidatorAccount` — registered validator credentials and stake
 
 Nine on-chain instructions handle the full lifecycle: `initialize`, `register_miner`, `register_validator`, `assign_job`, `submit_result`, `validate_result`, `mint_reward`, `claim_discovery_bonus`, and `update_target`.
+
+The `mint_reward` instruction applies the two-layer halving schedule automatically: reward = base × supply_multiplier × hit_multiplier (see Section 3.4).
 
 **Program ID:** `3dYbT2egotmpGBoLZe2pytsraffxre7V5dySsTKgxYiC`
 
@@ -221,7 +270,7 @@ The miner dashboard opens at **http://localhost:3000** showing real-time statist
 ### Phase 1 — Foundation (Q3 2026)
 - [x] Solana program written and compiled
 - [x] Miner software released for Ubuntu + Windows
-- [x] 10 cancer targets active
+- [x] 20 cancer targets active
 - [x] GitHub repositories published
 - [ ] Mainnet deployment
 - [ ] lifecompute.ai launch
