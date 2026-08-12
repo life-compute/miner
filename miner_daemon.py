@@ -44,6 +44,7 @@ try:
     from adaptive.life_scout     import (get_focused_candidates,
                                          detect_protein_family)
     from adaptive.life_diversity import SubmissionMemory, greedy_diverse_select
+    from adaptive.life_generate  import generate_candidates
     _ADAPTIVE_AVAILABLE = True
 except Exception as _e:
     _ADAPTIVE_AVAILABLE = False
@@ -408,8 +409,10 @@ def main():
             adaptive_phase = "explore"
         elif epoch_frac < 0.80:
             adaptive_phase = "exploit"
-        else:
+        elif epoch_frac < 0.85:
             adaptive_phase = "refine"
+        else:
+            adaptive_phase = "generate"   # Phase 4: generative AI (final 15%)
 
         # ── MOLECULE SELECTION ────────────────────────────────────────────────
         # Priority 1: reference compound for this target (if not yet screened)
@@ -424,32 +427,52 @@ def main():
             # Adaptive stack: get focused, ART-ranked, diversity-filtered candidates
             try:
                 family = detect_protein_family(uid, target.get("protein_sequence", ""))
-                cands, scout_diag = get_focused_candidates(
-                    target=target,
-                    n=1,
-                    phase=adaptive_phase,
-                    best_smiles=best_boltz_smiles[-10:],
-                    art_model=art_model,
-                )
-                # novelty filter vs submission memory
-                if cands and sub_memory is not None:
-                    novel_cands = sub_memory.filter_novel(cands)
-                    cands = novel_cands if novel_cands else cands  # fallback if all seen
-                if cands:
-                    _, mol, pred_score = cands[0]
-                    is_ref = False
-                    log.info(
-                        f"[ADAPTIVE] phase={adaptive_phase}  family={family}  "
-                        f"predicted_score={pred_score:.4f}  "
-                        f"passed_filter={scout_diag.get('n_passed_filter', '?')}  "
-                        f"diverse={scout_diag.get('n_diverse', '?')}"
+
+                # ── Phase 4: generative AI (final 15% of epoch) ──────────────
+                if adaptive_phase == "generate":
+                    gen_cands = generate_candidates(target, art_model, n_total=100)
+                    if gen_cands and sub_memory is not None:
+                        gen_cands = sub_memory.filter_novel(gen_cands)
+                    if gen_cands:
+                        _, mol, pred_score = gen_cands[0]
+                        is_ref = False
+                        log.info(
+                            f"[GENERATE] phase=generate  family={family}  "
+                            f"generated={len(gen_cands)}  top_art={pred_score:.4f}"
+                        )
+                    else:
+                        # No generated candidates — fall through to scout
+                        log.info("[GENERATE] no valid generated candidates — scout fallback")
+                        adaptive_phase = "refine"   # let scout handle
+
+                # ── Phases 1–3: Scout/Pulse ───────────────────────────────────
+                if adaptive_phase != "generate":
+                    cands, scout_diag = get_focused_candidates(
+                        target=target,
+                        n=1,
+                        phase=adaptive_phase,
+                        best_smiles=best_boltz_smiles[-10:],
+                        art_model=art_model,
                     )
-                else:
-                    # Scout returned nothing — pulse seed + random fallback
-                    log.warning("[ADAPTIVE] Scout returned no candidates — running pulse seed")
-                    run_sweep(max_configs=50, verbose=False)
-                    mol    = random.choice(SCAFFOLDS)
-                    is_ref = False
+                    # novelty filter vs submission memory
+                    if cands and sub_memory is not None:
+                        novel_cands = sub_memory.filter_novel(cands)
+                        cands = novel_cands if novel_cands else cands  # fallback if all seen
+                    if cands:
+                        _, mol, pred_score = cands[0]
+                        is_ref = False
+                        log.info(
+                            f"[ADAPTIVE] phase={adaptive_phase}  family={family}  "
+                            f"predicted_score={pred_score:.4f}  "
+                            f"passed_filter={scout_diag.get('n_passed_filter', '?')}  "
+                            f"diverse={scout_diag.get('n_diverse', '?')}"
+                        )
+                    else:
+                        # Scout returned nothing — pulse seed + random fallback
+                        log.warning("[ADAPTIVE] Scout returned no candidates — running pulse seed")
+                        run_sweep(max_configs=50, verbose=False)
+                        mol    = random.choice(SCAFFOLDS)
+                        is_ref = False
             except Exception as _ae:
                 log.warning(f"[ADAPTIVE] scout failed ({_ae}) — random scaffold fallback")
                 mol    = random.choice(SCAFFOLDS)
