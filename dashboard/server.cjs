@@ -86,6 +86,7 @@ function readJson(filePath) {
 function buildPublicStats() {
   const s         = readJson(STATS) || {};
   const boltzRows = tailJsonl(path.join(OUT, 'life_boltz_scores.jsonl'), 200);
+  const g         = s.global || {};
 
   // Scoring history: best boltz score per 5-min epoch bucket (TARGET_REFRESH = 300s)
   const EPOCH_WINDOW = 300;
@@ -107,6 +108,14 @@ function buildPublicStats() {
     .sort((a, b) => a.epoch - b.epoch)
     .slice(-20);
 
+  // Network stats — pass through real on-chain values; null means "—" in UI.
+  // Never substitute mock numbers.
+  const network = {
+    total_miners:       g.total_miners       ?? null,
+    molecules_screened: g.molecules_screened ?? null,
+    targets_solved:     g.targets_solved     ?? null,
+  };
+
   return {
     alive:               s.alive               ?? false,
     current_target:      s.current_target      ?? '—',
@@ -115,7 +124,7 @@ function buildPublicStats() {
     life_earned:         s.life_earned         ?? 0,
     targets_contributed: s.targets_contributed ?? [],
     scoring_history:     scoringHistory,
-    global:              s.global              ?? {},
+    network,
     started_at:          s.started_at          ?? null,
     last_updated:        s.last_updated        ?? null,
     ts:                  Date.now(),

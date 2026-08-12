@@ -406,12 +406,16 @@ function MinerStatusPanel({ alive, currentTarget, minerId }) {
       <div style={{ ...S.kvLast, flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
         <span style={S.globalLabel}>Miner UID</span>
         <span style={{
-          color:        T.textDim,
-          fontSize:     '11px',
-          wordBreak:    'break-all',
-          lineHeight:   1.5,
-          marginTop:    '4px',
-        }}>{minerId || '—'}</span>
+          color:     T.accentDim,
+          fontSize:  '13px',
+          fontWeight: 600,
+          marginTop: '4px',
+          letterSpacing: '0.04em',
+        }}>
+          {minerId && minerId !== '—'
+            ? `${minerId.slice(0, 8)}…${minerId.slice(-4)}`
+            : '—'}
+        </span>
       </div>
     </div>
   )
@@ -535,26 +539,34 @@ function ScoringHistoryPanel({ history }) {
   )
 }
 
-/* ─── Global Network panel ──────────────────────────────────── */
-function NetworkPanel({ global: g }) {
+/* ─── Global Network panel ──────────────────────────────────────── */
+function NetworkPanel({ network }) {
+  const fmt = (v) => v != null ? v.toLocaleString() : '—'
   return (
     <div style={S.panel}>
       <div style={S.panelGlow} />
       <div style={S.panelTitle}>
         <span>{ICONS.network}</span> Global Network
+        <span style={{ marginLeft: 'auto', fontSize: '10px', color: T.textDim }}>on-chain</span>
       </div>
 
       <div style={S.globalRow}>
         <span style={S.globalLabel}>Total Miners Online</span>
-        <span style={S.globalValue}>{(g?.total_miners ?? 0).toLocaleString()}</span>
+        <span style={{ ...S.globalValue, color: network?.total_miners != null ? T.accent : T.muted }}>
+          {fmt(network?.total_miners)}
+        </span>
       </div>
       <div style={S.globalRow}>
         <span style={S.globalLabel}>Global Molecules Screened</span>
-        <span style={S.globalValue}>{(g?.molecules_global ?? g?.total_molecules_screened ?? 0).toLocaleString()}</span>
+        <span style={{ ...S.globalValue, color: network?.molecules_screened != null ? T.accent : T.muted }}>
+          {fmt(network?.molecules_screened)}
+        </span>
       </div>
       <div style={{ ...S.globalRow, borderBottom: 'none' }}>
-        <span style={S.globalLabel}>Targets Solved (candidates found)</span>
-        <span style={S.globalValue}>{g?.targets_solved ?? 0}</span>
+        <span style={S.globalLabel}>Confirmed Hits (all targets)</span>
+        <span style={{ ...S.globalValue, color: network?.targets_solved != null ? T.accent : T.muted }}>
+          {fmt(network?.targets_solved)}
+        </span>
       </div>
     </div>
   )
@@ -910,7 +922,7 @@ export default function App() {
   const mols    = pub?.molecules_screened ?? 0
   const life    = pub?.life_earned        ?? 0
   const tgts    = pub?.targets_contributed ?? []
-  const glob    = pub?.global             ?? {}
+  const network = pub?.network            ?? {}
   const scoring = pub?.scoring_history    ?? []
   const target  = pub?.current_target    ?? '—'
   const minerId = pub?.miner_id          ?? '—'
@@ -939,7 +951,7 @@ export default function App() {
 
           <div style={S.sectionLabel}>PUBLIC — PERFORMANCE &amp; NETWORK</div>
           <ScoringHistoryPanel history={scoring} />
-          <NetworkPanel        global={glob} />
+          <NetworkPanel        network={network} />
 
           {/* ── Private panels (localhost only) ── */}
           {isLocal && (

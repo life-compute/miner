@@ -82,6 +82,113 @@ logging.basicConfig(
 log = logging.getLogger("life-miner")
 
 
+# ── Solana RPC helpers — no external deps ─────────────────────────────────────
+#
+# Anchor account discriminators = sha256("account:TypeName")[:8]
+# MinerAccount layout (after 8-byte discriminator):
+#   owner(32) + total_life_earned(8) + molecules_screened(8) + ...
+# TargetAccount layout (after 8-byte discriminator):
+#   target_id(1) + uniprot_id(10) + difficulty(1) + is_active(1) +
+#   best_score_this_week(4) + best_scorer_this_week(32) + week_number(8) +
+#   hit_count(8) @ offset 65
+#
+_DISC_TARGET = bytes([140, 246, 247, 200, 198, 220,  24, 250])  # TargetAccount
+_DISC_MINER  = bytes([232, 196,  79, 139, 222, 213, 161,  99])  # MinerAccount
+
+_NETWORK_STATS_CACHE: dict = {}
+_NETWORK_STATS_TTL   = 120   # seconds
+
+
+# Pure-Python base58 (Solana alphabet) — no external dep
+_B58_ALPHA = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+def _b58enc(data: bytes) -> str:
+    n = int.from_bytes(data, "big")
+    out = []
+    while n:
+        n, r = divmod(n, 58)
+        out.append(_B58_ALPHA[r])
+    out.extend(_B58_ALPHA[0] for b in data if b == 0)
+    return bytes(reversed(out)).decode()
+
+
+def _rpc(method: str, params: list) -> object:
+    """Single Solana JSON-RPC call; returns result value or None on error."""
+    payload = json.dumps({"jsonrpc": "2.0", "id": 1,
+                          "method": method, "params": params}).encode()
+    try:
+        req = urllib.request.Request(
+            SOLANA_RPC, data=payload,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read()).get("result")
+    except Exception as e:
+        log.debug(f"[RPC] {method}: {e}")
+        return None
+
+
+def _get_accounts(disc: bytes) -> list[bytes]:
+    """Return raw account data blobs matching an 8-byte discriminator."""
+    import base64 as _b64
+    result = _rpc("getProgramAccounts", [
+        PROGRAM_ID,
+        {
+            "encoding": "base64",
+            "filters": [{"memcmp": {"offset": 0, "bytes": _b58enc(disc)}}],
+        },
+    ])
+    if not isinstance(result, list):
+        return []
+    out = []
+    for item in result:
+        try:
+            raw = _b64.b64decode(item["account"]["data"][0])
+            if raw[:8] == disc:
+                out.append(raw)
+        except Exception:
+            pass
+    return out
+
+
+def fetch_network_stats() -> dict:
+    """Return real on-chain network stats (cached _NETWORK_STATS_TTL s).
+
+    Keys: total_miners, molecules_screened, targets_solved.
+    Values are int or None — None renders as "—" in the dashboard.
+    Never falls back to mock numbers.
+    """
+    global _NETWORK_STATS_CACHE
+    if _NETWORK_STATS_CACHE.get("_ts", 0) + _NETWORK_STATS_TTL > time.time():
+        return _NETWORK_STATS_CACHE
+
+    result: dict = {"total_miners": None, "molecules_screened": None, "targets_solved": None}
+    try:
+        # Registered miners
+        miner_accounts = _get_accounts(_DISC_MINER)
+        result["total_miners"] = len(miner_accounts)
+
+        # molecules_screened: sum MinerAccount.molecules_screened @ offset 48 (u64 LE)
+        result["molecules_screened"] = sum(
+            int.from_bytes(raw[48:56], "little")
+            for raw in miner_accounts if len(raw) >= 56
+        )
+
+        # targets_solved: sum TargetAccount.hit_count @ offset 65 (u64 LE)
+        target_accounts = _get_accounts(_DISC_TARGET)
+        result["targets_solved"] = sum(
+            int.from_bytes(raw[65:73], "little")
+            for raw in target_accounts if len(raw) >= 73
+        )
+
+        log.debug("[NETWORK] miners=%s screened=%s hits=%s",
+                  result["total_miners"], result["molecules_screened"], result["targets_solved"])
+    except Exception as e:
+        log.debug(f"[NETWORK] fetch_network_stats failed: {e}")
+
+    result["_ts"] = time.time()
+    _NETWORK_STATS_CACHE = result
+    return result
+
+
 # ── Boltz2 scoring ────────────────────────────────────────────────────────────
 #
 # Runs in a subprocess under the nova venv to avoid dependency conflicts.
@@ -379,7 +486,7 @@ def main():
         "targets_contributed": [], "transactions": [],
         "adaptive": {"available": _ADAPTIVE_AVAILABLE, "art_ready": False,
                      "boltz_scores_accumulated": 0, "phase": "explore"},
-        "global": {"total_miners": 412, "molecules_global": 1_847_392, "targets_solved": 2},
+        "global": {"total_miners": None, "molecules_screened": None, "targets_solved": None},
         "started_at": datetime.now(timezone.utc).isoformat(), "last_updated": "",
     }
     write_stats(stats)
@@ -623,11 +730,7 @@ def main():
             "targets_contributed": targets_hit,
             "transactions": txs[-20:],
             "last_updated": datetime.now(timezone.utc).isoformat(),
-            "global": {
-                "total_miners": 412 + molecules_done // 100,
-                "molecules_global": 1_847_392 + molecules_done * 47,
-                "targets_solved": 2 + len(targets_hit) // 3,
-            },
+            "global": fetch_network_stats(),
         })
         write_stats(stats)
         log.info(f"Screened: {molecules_done} | $LIFE: {life_earned:.1f} | txs: {len(txs)}")
