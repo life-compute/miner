@@ -45,6 +45,7 @@ try:
                                          detect_protein_family)
     from adaptive.life_diversity import SubmissionMemory, greedy_diverse_select
     from adaptive.life_generate  import generate_candidates
+    from adaptive.life_chembl    import validate_against_chembl, download_all as chembl_download_all
     _ADAPTIVE_AVAILABLE = True
 except Exception as _e:
     _ADAPTIVE_AVAILABLE = False
@@ -352,6 +353,25 @@ def main():
         except Exception as _se:
             log.warning(f"[ADAPTIVE] Initial pulse sweep failed (non-fatal): {_se}")
 
+    # ── ChEMBL background pre-download (all targets, cache-first) ─────────────
+    if _ADAPTIVE_AVAILABLE:
+        try:
+            import threading as _threading2
+            def _bg_chembl():
+                try:
+                    import urllib.request as _ur
+                    with _ur.urlopen(TARGETS_URL, timeout=15) as _r:
+                        _tgts = json.loads(_r.read())
+                    _uids = [t["uniprot_id"] for t in _tgts]
+                    log.info(f"[ChEMBL] Pre-downloading actives for {len(_uids)} targets ...")
+                    chembl_download_all(_uids)
+                    log.info("[ChEMBL] Pre-download complete")
+                except Exception as _ce:
+                    log.warning(f"[ChEMBL] Background download failed (non-fatal): {_ce}")
+            _threading2.Thread(target=_bg_chembl, daemon=True, name="chembl-prefetch").start()
+        except Exception as _ce:
+            log.warning(f"[ChEMBL] Could not start prefetch thread: {_ce}")
+
     stats = {
         "molecules_screened": 0, "life_earned": 0.0,
         "targets_contributed": [], "transactions": [],
@@ -556,6 +576,22 @@ def main():
         tx_sig = None
         if hit and affinity is not None and tid in TARGET_ID_MAP:
             log.info(f"  HIT — submitting to devnet program {PROGRAM_ID}...")
+            # ChEMBL novelty cross-reference (non-fatal, best-effort)
+            if _ADAPTIVE_AVAILABLE:
+                try:
+                    _chembl_result = validate_against_chembl(mol, uid)
+                    _novel = _chembl_result.get("is_novel", True)
+                    _sim   = _chembl_result.get("similarity", 0.0)
+                    _close = _chembl_result.get("closest_smiles", "")
+                    log.info(
+                        f"  [ChEMBL] novel={_novel}  sim={_sim:.2f}  "
+                        f"vs {_close[:50] if _close else 'n/a'}"
+                    )
+                except Exception as _chembl_e:
+                    log.debug(f"  [ChEMBL] cross-reference failed: {_chembl_e}")
+                    _chembl_result = {}
+            else:
+                _chembl_result = {}
             resp = submit_on_chain(TARGET_ID_MAP[tid], mol, affinity)
             if resp and resp.get("tx"):
                 tx_sig = resp["tx"]
@@ -564,6 +600,8 @@ def main():
                 log.info(f"  Explorer: https://explorer.solana.com/tx/{tx_sig}?cluster=devnet")
                 txs.append({"tx": tx_sig, "target": tid, "score": affinity,
                              "boltz_score": boltz_score,
+                             "chembl_novel": _chembl_result.get("is_novel"),
+                             "chembl_sim":   _chembl_result.get("similarity"),
                              "ts": datetime.now(timezone.utc).isoformat()})
             elif resp and resp.get("status") == "already_submitted":
                 log.info("  Already submitted this epoch — waiting for next epoch")

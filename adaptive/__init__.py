@@ -31,6 +31,13 @@ from .life_generate  import (
     scaffold_hopping,
     guided_mutation,
 )
+from .life_chembl    import (
+    download_chembl_actives,
+    get_chembl_actives,
+    validate_against_chembl,
+    get_chembl_seeds,
+    download_all as chembl_download_all,
+)
 
 __all__ = [
     "run_sweep", "get_next_candidates", "proxy_score",
@@ -39,4 +46,6 @@ __all__ = [
     "SubmissionMemory", "greedy_diverse_select", "batch_shannon_entropy", "is_novel",
     "generate_candidates", "is_boltz_safe_smiles",
     "fragment_recombination", "scaffold_hopping", "guided_mutation",
+    "download_chembl_actives", "get_chembl_actives", "validate_against_chembl",
+    "get_chembl_seeds", "chembl_download_all",
 ]

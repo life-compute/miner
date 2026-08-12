@@ -394,11 +394,19 @@ def fragment_recombination(target_id: str, n_max: int = 50) -> list:
     submitted = _load_submitted_smiles()
     seen      = set(submitted)
 
-    # ── BRICS decompose each parent ────────────────────────────────────────────
+    # ── BRICS decompose each parent (Boltz2 top-10 + up to 5 ChEMBL seeds) ───
     all_frag_mols: list    = []
     seen_frag_canon: set   = set()
 
-    for row in top10:
+    # Augment parents with ChEMBL seeds when available
+    chembl_extra: list = []
+    try:
+        from .life_chembl import get_chembl_seeds as _chembl_seeds
+        chembl_extra = [{"smiles": s} for s in _chembl_seeds(target_id, n=5)]
+    except Exception:
+        pass
+
+    for row in (top10 + chembl_extra):
         smi = row.get("smiles", "")
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
@@ -507,13 +515,28 @@ def scaffold_hopping(target_id: str, n_max: int = 20) -> list:
     if parent_mol is None:
         return records
 
+    # Also try best ChEMBL seed as a second hop parent (Strategy A)
+    chembl_parent_mol = None
+    try:
+        from .life_chembl import get_chembl_seeds as _chembl_seeds
+        seeds = _chembl_seeds(target_id, n=1)
+        if seeds:
+            chembl_parent_mol = Chem.MolFromSmiles(seeds[0])
+    except Exception:
+        pass
+
     submitted = _load_submitted_smiles()
     seen      = set(submitted)
 
     # ── Strategy A: Reaction SMARTS ring swaps ────────────────────────────────
-    for name, desc, rxn in _get_scaffold_rxns():
+    hop_parents = [(parent_smi, parent_mol)]
+    if chembl_parent_mol is not None:
+        hop_parents.append(("chembl_seed", chembl_parent_mol))
+
+    for hop_smi, hop_mol in hop_parents:
+      for name, desc, rxn in _get_scaffold_rxns():
         try:
-            products = rxn.RunReactants((parent_mol,))
+            products = rxn.RunReactants((hop_mol,))
         except Exception as e:
             log.debug(f"[GENERATE] scaffold rxn {name} RunReactants failed: {e}")
             continue
@@ -529,7 +552,7 @@ def scaffold_hopping(target_id: str, n_max: int = 20) -> list:
                     records.append({
                         "smiles":        prod_smi,
                         "method":        f"scaffold_hop:{name}",
-                        "parent_smiles": parent_smi,
+                        "parent_smiles": hop_smi,
                         "art_score":     None,
                         "boltz_score":   None,
                         "target":        target_id,
@@ -648,6 +671,15 @@ def guided_mutation(
         log.debug("[GENERATE] Method 3: no Boltz scores yet — skipping")
         return records
 
+    # Extend parent pool with up to 3 ChEMBL seeds
+    chembl_seed_rows: list = []
+    try:
+        from .life_chembl import get_chembl_seeds as _chembl_seeds
+        chembl_seed_rows = [{"smiles": s} for s in _chembl_seeds(target_id, n=3)]
+    except Exception:
+        pass
+    parents = top5 + chembl_seed_rows
+
     mutation_rxns = _get_mutation_rxns()
     if not mutation_rxns:
         log.debug("[GENERATE] Method 3: no compiled mutation reactions")
@@ -667,7 +699,7 @@ def guided_mutation(
     submitted = _load_submitted_smiles()
     seen      = set(submitted)
 
-    for row in top5:
+    for row in parents:
         if len(records) >= n_max:
             break
         parent_smi = row.get("smiles", "")
