@@ -5,8 +5,8 @@ const T = {
   bg:            '#050a05',
   surface:       '#080f08',
   surfaceAlt:    '#0a140a',
-  border:        '#00ff4122',
-  borderBright:  '#00ff4155',
+  border:        '#00ff4133',
+  borderBright:  '#00ff4166',
   green:         '#00ff41',
   greenDim:      '#00cc33',
   greenGlow:     'rgba(0,255,65,0.15)',
@@ -20,9 +20,9 @@ const T = {
   red:           '#ff003c',
   redGlow:       'rgba(255,0,60,0.2)',
   muted:         '#1a3a1a',
-  textDim:       '#2a5a2a',
-  text:          '#88cc88',
-  textBright:    '#aaffaa',
+  textDim:       '#5a9a5a',
+  text:          '#aaddaa',
+  textBright:    '#ccffcc',
   mono:          "'Courier New', 'Source Code Pro', 'Lucida Console', monospace",
 }
 
