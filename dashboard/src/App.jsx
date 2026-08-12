@@ -1,924 +1,978 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 
-/* ─── Theme tokens ─────────────────────────────────────────── */
+/* ─── Biopunk theme tokens ──────────────────────────────────── */
 const T = {
-  bg:          '#0a0a0a',
-  surface:     '#111111',
-  border:      '#1a2a1a',
-  accent:      '#00ff88',
-  accentDim:   '#00cc6a',
-  accentGlow:  'rgba(0,255,136,0.12)',
-  warn:        '#ff6b35',
-  muted:       '#4a5568',
-  text:        '#e2e8f0',
-  textDim:     '#718096',
-  purple:      '#a78bfa',
-  purpleGlow:  'rgba(167,139,250,0.15)',
-  gold:        '#ffe066',
-  blue:        '#60a5fa',
-  blueGlow:    'rgba(96,165,250,0.12)',
-  privateBg:   '#0d0a1a',
-  privateBorder: '#2a1a3a',
-  privateAccent: '#c084fc',
+  bg:            '#050a05',
+  surface:       '#080f08',
+  surfaceAlt:    '#0a140a',
+  border:        '#00ff4122',
+  borderBright:  '#00ff4155',
+  green:         '#00ff41',
+  greenDim:      '#00cc33',
+  greenGlow:     'rgba(0,255,65,0.15)',
+  greenGlowStr:  'rgba(0,255,65,0.35)',
+  cyan:          '#00ffff',
+  cyanDim:       '#00cccc',
+  cyanGlow:      'rgba(0,255,255,0.12)',
+  purple:        '#9d00ff',
+  purpleDim:     '#7700cc',
+  purpleGlow:    'rgba(157,0,255,0.15)',
+  red:           '#ff003c',
+  redGlow:       'rgba(255,0,60,0.2)',
+  muted:         '#1a3a1a',
+  textDim:       '#2a5a2a',
+  text:          '#88cc88',
+  textBright:    '#aaffaa',
+  mono:          "'Courier New', 'Source Code Pro', 'Lucida Console', monospace",
 }
 
-/* ─── Inline styles ────────────────────────────────────────── */
+/* ─── Reusable glow box-shadow ──────────────────────────────── */
+const glow   = (c, s = 8)  => `0 0 ${s}px ${c}, 0 0 ${s*2}px ${c}44`
+const panelShadow = (c)     => `0 0 1px ${c}, 0 0 20px ${c}22, inset 0 0 40px ${c}05`
+
+/* ─── Inline styles ─────────────────────────────────────────── */
 const S = {
-  app: {
-    minHeight:       '100vh',
-    background:      T.bg,
-    color:           T.text,
-    fontFamily:      "'JetBrains Mono', 'Fira Mono', 'Cascadia Code', monospace",
-    padding:         '0',
-    margin:          '0',
+  wrap: {
+    minHeight:   '100vh',
+    background:  T.bg,
+    color:       T.text,
+    fontFamily:  T.mono,
+    position:    'relative',
+    overflow:    'hidden',
+  },
+  scanlines: {
+    position:    'fixed',
+    top: 0, left: 0, right: 0, bottom: 0,
+    pointerEvents: 'none',
+    zIndex:      1000,
+    background:  'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 4px)',
+  },
+  matrixCanvas: {
+    position:    'fixed',
+    top: 0, left: 0,
+    width:       '100%',
+    height:      '100%',
+    opacity:     0.06,
+    pointerEvents: 'none',
+    zIndex:      0,
+  },
+  content: {
+    position:    'relative',
+    zIndex:      1,
   },
   header: {
-    borderBottom:    `1px solid ${T.border}`,
-    padding:         '24px 32px',
-    background:      `linear-gradient(180deg, #0f1a0f 0%, ${T.bg} 100%)`,
-    display:         'flex',
-    flexDirection:   'column',
-    alignItems:      'center',
-    gap:             '8px',
-    position:        'relative',
+    borderBottom:  `1px solid ${T.border}`,
+    padding:       '0',
+    background:    `linear-gradient(180deg, #020802 0%, ${T.bg} 100%)`,
+    position:      'relative',
+    overflow:      'hidden',
+  },
+  headerInner: {
+    padding:       '28px 32px 24px',
+    display:       'flex',
+    flexDirection: 'column',
+    alignItems:    'center',
+    gap:           '10px',
+    position:      'relative',
+    zIndex:        2,
   },
   tagline: {
-    fontSize:        '22px',
-    fontWeight:      700,
-    color:           T.accent,
-    letterSpacing:   '0.04em',
-    textShadow:      `0 0 24px ${T.accent}`,
+    fontSize:      '26px',
+    fontWeight:    700,
+    color:         T.green,
+    letterSpacing: '0.06em',
+    textTransform: 'uppercase',
+    textShadow:    `0 0 20px ${T.green}, 0 0 40px ${T.green}88, 0 0 80px ${T.green}44`,
+    textAlign:     'center',
+    animation:     'textPulse 3s ease-in-out infinite',
   },
   subtitle: {
-    fontSize:        '13px',
-    color:           T.textDim,
-    letterSpacing:   '0.12em',
-    textTransform:   'uppercase',
+    fontSize:      '11px',
+    color:         T.cyan,
+    letterSpacing: '0.2em',
+    textTransform: 'uppercase',
+    textShadow:    glow(T.cyan, 4),
   },
+  statusBadge: (alive) => ({
+    position:      'absolute',
+    top:           '24px',
+    right:         '32px',
+    display:       'flex',
+    alignItems:    'center',
+    gap:           '8px',
+    fontSize:      '11px',
+    color:         alive ? T.green : T.red,
+    letterSpacing: '0.1em',
+    textShadow:    glow(alive ? T.green : T.red, 4),
+    border:        `1px solid ${alive ? T.green : T.red}55`,
+    padding:       '4px 12px',
+    borderRadius:  '2px',
+    background:    alive ? '#00ff4108' : '#ff003c08',
+  }),
   statusDot: (alive) => ({
-    position:        'absolute',
-    top:             '24px',
-    right:           '32px',
-    display:         'flex',
-    alignItems:      'center',
-    gap:             '8px',
-    fontSize:        '13px',
-    color:           alive ? T.accent : T.warn,
+    width:         '6px',
+    height:        '6px',
+    borderRadius:  '50%',
+    background:    alive ? T.green : T.red,
+    boxShadow:     glow(alive ? T.green : T.red, 4),
+    animation:     alive ? 'blink 1.2s step-end infinite' : 'none',
   }),
   grid: {
-    display:         'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-    gap:             '20px',
-    padding:         '28px 32px',
-    maxWidth:        '1400px',
-    margin:          '0 auto',
+    display:       'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
+    gap:           '16px',
+    padding:       '24px 28px',
+    maxWidth:      '1440px',
+    margin:        '0 auto',
   },
   sectionLabel: {
-    gridColumn:      '1 / -1',
-    fontSize:        '11px',
-    letterSpacing:   '0.18em',
-    textTransform:   'uppercase',
-    color:           T.textDim,
-    paddingBottom:   '4px',
-    borderBottom:    `1px solid ${T.border}`,
-    marginTop:       '8px',
+    gridColumn:    '1 / -1',
+    fontSize:      '10px',
+    letterSpacing: '0.22em',
+    textTransform: 'uppercase',
+    color:         T.textDim,
+    paddingBottom: '6px',
+    borderBottom:  `1px solid ${T.border}`,
+    marginTop:     '8px',
+    display:       'flex',
+    alignItems:    'center',
+    gap:           '10px',
   },
-  privateSectionLabel: {
-    gridColumn:      '1 / -1',
-    fontSize:        '11px',
-    letterSpacing:   '0.18em',
-    textTransform:   'uppercase',
-    color:           T.privateAccent,
-    paddingBottom:   '4px',
-    borderBottom:    `1px solid ${T.privateBorder}`,
-    marginTop:       '16px',
-    display:         'flex',
-    alignItems:      'center',
-    gap:             '10px',
+  sectionTick: {
+    width:         '6px',
+    height:        '6px',
+    background:    T.green,
+    boxShadow:     glow(T.green, 3),
   },
-  panel: {
-    background:      T.surface,
-    border:          `1px solid ${T.border}`,
-    borderRadius:    '12px',
-    padding:         '28px',
-    position:        'relative',
-    overflow:        'hidden',
-    transition:      'border-color 0.3s',
-  },
-  privatePanel: {
-    background:      T.privateBg,
-    border:          `1px solid ${T.privateBorder}`,
-    borderRadius:    '12px',
-    padding:         '28px',
-    position:        'relative',
-    overflow:        'hidden',
-  },
-  panelGlow: {
-    position:        'absolute',
-    top:             0,
-    left:            0,
-    right:           0,
-    height:          '2px',
-    background:      `linear-gradient(90deg, transparent, ${T.accent}, transparent)`,
-  },
-  panelGlowPurple: {
-    position:        'absolute',
-    top:             0,
-    left:            0,
-    right:           0,
-    height:          '2px',
-    background:      `linear-gradient(90deg, transparent, ${T.purple}, transparent)`,
-  },
-  panelGlowBlue: {
-    position:        'absolute',
-    top:             0,
-    left:            0,
-    right:           0,
-    height:          '2px',
-    background:      `linear-gradient(90deg, transparent, ${T.blue}, transparent)`,
-  },
-  panelGlowPrivate: {
-    position:        'absolute',
-    top:             0,
-    left:            0,
-    right:           0,
-    height:          '2px',
-    background:      `linear-gradient(90deg, transparent, ${T.privateAccent}, transparent)`,
-  },
+  panel: (accent = T.green) => ({
+    background:    T.surface,
+    border:        `1px solid ${accent}33`,
+    borderRadius:  '3px',
+    padding:       '22px',
+    position:      'relative',
+    overflow:      'hidden',
+    boxShadow:     panelShadow(accent),
+    transition:    'border-color 0.4s, box-shadow 0.4s',
+  }),
+  panelBar: (accent) => ({
+    position:      'absolute',
+    top: 0, left: 0, right: 0,
+    height:        '1px',
+    background:    `linear-gradient(90deg, transparent, ${accent}, transparent)`,
+    boxShadow:     `0 0 8px ${accent}`,
+  }),
+  panelCorner: (pos, accent) => ({
+    position:      'absolute',
+    [pos.includes('t') ? 'top' : 'bottom']: 0,
+    [pos.includes('l') ? 'left' : 'right']: 0,
+    width:         '12px',
+    height:        '12px',
+    borderTop:     pos.includes('t') ? `1px solid ${accent}` : 'none',
+    borderBottom:  pos.includes('b') ? `1px solid ${accent}` : 'none',
+    borderLeft:    pos.includes('l') ? `1px solid ${accent}` : 'none',
+    borderRight:   pos.includes('r') ? `1px solid ${accent}` : 'none',
+  }),
   panelTitle: {
-    fontSize:        '11px',
-    color:           T.textDim,
-    letterSpacing:   '0.14em',
-    textTransform:   'uppercase',
-    marginBottom:    '16px',
-    display:         'flex',
-    alignItems:      'center',
-    gap:             '8px',
+    fontSize:      '10px',
+    color:         T.textDim,
+    letterSpacing: '0.2em',
+    textTransform: 'uppercase',
+    marginBottom:  '18px',
+    display:       'flex',
+    alignItems:    'center',
+    gap:           '8px',
   },
-  privateNote: {
-    fontSize:        '10px',
-    color:           T.privateAccent,
-    background:      '#1a0a2a',
-    border:          `1px solid ${T.privateBorder}`,
-    borderRadius:    '4px',
-    padding:         '4px 10px',
-    marginBottom:    '14px',
-    display:         'inline-block',
-    letterSpacing:   '0.06em',
-  },
-  bigNumber: {
-    fontSize:        '52px',
-    fontWeight:      700,
-    color:           T.accent,
-    lineHeight:      1,
-    textShadow:      `0 0 32px ${T.accentGlow}`,
-    marginBottom:    '8px',
+  titleAccent: (c) => ({
+    color:         c,
+    textShadow:    glow(c, 3),
+  }),
+  bigNum: (c = T.green) => ({
+    fontSize:      '56px',
+    fontWeight:    700,
+    color:         c,
+    lineHeight:    1,
+    textShadow:    `0 0 20px ${c}, 0 0 40px ${c}66`,
+    marginBottom:  '6px',
     fontVariantNumeric: 'tabular-nums',
-  },
+    letterSpacing: '-0.02em',
+    animation:     'textPulse 4s ease-in-out infinite',
+  }),
   label: {
-    fontSize:        '13px',
-    color:           T.textDim,
-  },
-  targetList: {
-    listStyle:       'none',
-    padding:         0,
-    margin:          0,
-    display:         'flex',
-    flexDirection:   'column',
-    gap:             '10px',
-  },
-  targetItem: {
-    display:         'flex',
-    alignItems:      'center',
-    gap:             '12px',
-    padding:         '10px 14px',
-    background:      '#0d1a0d',
-    borderRadius:    '8px',
-    border:          `1px solid ${T.border}`,
-    fontSize:        '13px',
-    animation:       'fadeIn 0.4s ease',
-  },
-  targetDot: {
-    width:           '8px',
-    height:          '8px',
-    borderRadius:    '50%',
-    background:      T.accent,
-    boxShadow:       `0 0 6px ${T.accent}`,
-    flexShrink:      0,
-  },
-  globalRow: {
-    display:         'flex',
-    justifyContent:  'space-between',
-    alignItems:      'center',
-    padding:         '14px 0',
-    borderBottom:    `1px solid ${T.border}`,
-  },
-  globalLabel: {
-    fontSize:        '13px',
-    color:           T.textDim,
-  },
-  globalValue: {
-    fontSize:        '16px',
-    fontWeight:      600,
-    color:           T.accent,
-    fontVariantNumeric: 'tabular-nums',
-  },
-  submissionList: {
-    marginTop:       '20px',
-    display:         'flex',
-    flexDirection:   'column',
-    gap:             '6px',
-    maxHeight:       '200px',
-    overflowY:       'auto',
-  },
-  submissionItem: {
-    display:         'flex',
-    justifyContent:  'space-between',
-    fontSize:        '11px',
-    color:           T.textDim,
-    padding:         '5px 0',
-    borderBottom:    `1px solid #111`,
-  },
-  footer: {
-    borderTop:       `1px solid ${T.border}`,
-    padding:         '16px 32px',
-    display:         'flex',
-    justifyContent:  'space-between',
-    alignItems:      'center',
-    fontSize:        '12px',
-    color:           T.muted,
-  },
-  pulseDot: {
-    width:           '8px',
-    height:          '8px',
-    borderRadius:    '50%',
-    background:      T.accent,
-    display:         'inline-block',
-    marginRight:     '6px',
-    animation:       'pulse 2s infinite',
+    fontSize:      '11px',
+    color:         T.textDim,
+    letterSpacing: '0.06em',
   },
   kv: {
-    display:         'flex',
-    justifyContent:  'space-between',
-    alignItems:      'center',
-    padding:         '9px 0',
-    borderBottom:    `1px solid #161616`,
-    fontSize:        '13px',
+    display:       'flex',
+    justifyContent:'space-between',
+    alignItems:    'center',
+    padding:       '8px 0',
+    borderBottom:  `1px solid ${T.border}`,
+    fontSize:      '12px',
   },
   kvLast: {
-    display:         'flex',
-    justifyContent:  'space-between',
-    alignItems:      'center',
-    padding:         '9px 0',
-    fontSize:        '13px',
+    display:       'flex',
+    justifyContent:'space-between',
+    alignItems:    'center',
+    padding:       '8px 0',
+    fontSize:      '12px',
   },
-  pill: (color) => ({
-    background:      color + '22',
-    border:          `1px solid ${color}55`,
-    color:           color,
-    borderRadius:    '4px',
-    padding:         '2px 8px',
-    fontSize:        '11px',
-    fontWeight:      600,
-  }),
-  progressBar: (pct, color) => ({
-    height:          '6px',
-    borderRadius:    '3px',
-    background:      '#1a1a1a',
-    overflow:        'hidden',
-    position:        'relative',
-    marginTop:       '6px',
-  }),
-  progressFill: (pct, color) => ({
-    position:        'absolute',
-    top:             0, left: 0,
-    height:          '100%',
-    width:           pct + '%',
-    background:      color,
-    borderRadius:    '3px',
-    transition:      'width 0.8s ease',
-    boxShadow:       `0 0 8px ${color}88`,
-  }),
-  familyBar: {
-    display:         'flex',
-    gap:             '6px',
-    flexWrap:        'wrap',
-    marginTop:       '10px',
+  globalRow: {
+    display:       'flex',
+    justifyContent:'space-between',
+    alignItems:    'center',
+    padding:       '12px 0',
+    borderBottom:  `1px solid ${T.border}`,
   },
-  scoreRow: {
-    display:         'grid',
-    gridTemplateColumns: '1fr 80px 60px 70px',
-    gap:             '8px',
-    padding:         '6px 0',
-    borderBottom:    `1px solid #161616`,
-    fontSize:        '11px',
-    alignItems:      'center',
+  progressTrack: {
+    height:        '4px',
+    background:    '#0a1a0a',
+    border:        `1px solid ${T.border}`,
+    borderRadius:  '0',
+    overflow:      'hidden',
+    position:      'relative',
+    marginTop:     '6px',
   },
-  generatedRow: {
-    display:         'grid',
-    gridTemplateColumns: '1fr 80px 80px 60px',
-    gap:             '8px',
-    padding:         '6px 0',
-    borderBottom:    `1px solid #1a0a2a`,
-    fontSize:        '11px',
-    alignItems:      'center',
+  terminalLine: {
+    display:       'flex',
+    gap:           '8px',
+    alignItems:    'center',
+    padding:       '5px 0',
+    borderBottom:  `1px solid #0a150a`,
+    fontSize:      '11px',
+  },
+  prompt: {
+    color:         T.greenDim,
+    flexShrink:    0,
+    userSelect:    'none',
+  },
+  smiles: {
+    color:         T.cyan,
+    textShadow:    glow(T.cyan, 2),
+    overflow:      'hidden',
+    textOverflow:  'ellipsis',
+    whiteSpace:    'nowrap',
+    flex:          1,
+    fontSize:      '10px',
+    fontFamily:    T.mono,
+  },
+  pill: (c) => ({
+    background:    c + '15',
+    border:        `1px solid ${c}44`,
+    color:         c,
+    textShadow:    glow(c, 2),
+    borderRadius:  '2px',
+    padding:       '2px 7px',
+    fontSize:      '10px',
+    fontWeight:    700,
+    letterSpacing: '0.1em',
+    fontFamily:    T.mono,
+  }),
+  targetItem: {
+    display:       'flex',
+    alignItems:    'center',
+    gap:           '12px',
+    padding:       '10px 14px',
+    background:    '#020902',
+    border:        `1px solid ${T.border}`,
+    borderRadius:  '2px',
+    fontSize:      '12px',
+    marginBottom:  '8px',
+    transition:    'border-color 0.3s',
+  },
+  targetPip: {
+    width:         '6px',
+    height:        '6px',
+    background:    T.green,
+    boxShadow:     glow(T.green, 4),
+    flexShrink:    0,
+    animation:     'blink 2s step-end infinite',
+  },
+  footer: {
+    borderTop:     `1px solid ${T.border}`,
+    padding:       '12px 28px',
+    display:       'flex',
+    justifyContent:'space-between',
+    alignItems:    'center',
+    fontSize:      '10px',
+    color:         T.textDim,
+    letterSpacing: '0.1em',
   },
 }
 
-/* ─── Animated counter hook ────────────────────────────────── */
-function useAnimatedNumber(target, duration = 800) {
-  const [display, setDisplay] = useState(target)
-  const prevRef = useRef(target)
-  const rafRef  = useRef(null)
-
+/* ─── Matrix rain canvas ────────────────────────────────────── */
+function MatrixRain() {
+  const ref = useRef()
   useEffect(() => {
-    const start = prevRef.current
-    const diff  = target - start
-    if (diff === 0) return
-    const startTime = performance.now()
-
-    const step = (now) => {
-      const t = Math.min((now - startTime) / duration, 1)
-      const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
-      setDisplay(Math.round(start + diff * eased))
-      if (t < 1) rafRef.current = requestAnimationFrame(step)
-      else { prevRef.current = target; setDisplay(target) }
+    const canvas = ref.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    const chars = 'ATCGAUCGTAGCTAGCATCGAUCGATCG01アイウエオカキクケコ'
+    let w, h, cols, drops
+    function resize() {
+      w = canvas.width  = window.innerWidth
+      h = canvas.height = window.innerHeight
+      cols = Math.floor(w / 16)
+      drops = Array(cols).fill(0).map(() => Math.random() * -50)
     }
-    rafRef.current = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(rafRef.current)
-  }, [target, duration])
-
-  return display
+    resize()
+    window.addEventListener('resize', resize)
+    const tick = () => {
+      ctx.fillStyle = 'rgba(5,10,5,0.12)'
+      ctx.fillRect(0, 0, w, h)
+      ctx.fillStyle = '#00ff41'
+      ctx.font = '13px "Courier New", monospace'
+      drops.forEach((y, i) => {
+        const ch = chars[Math.floor(Math.random() * chars.length)]
+        ctx.fillStyle = y * 16 < 80 ? '#00ffff' : '#00ff41'
+        ctx.fillText(ch, i * 16, y * 16)
+        if (y * 16 > h && Math.random() > 0.975) drops[i] = 0
+        else drops[i] += 0.4
+      })
+    }
+    const id = setInterval(tick, 50)
+    return () => { clearInterval(id); window.removeEventListener('resize', resize) }
+  }, [])
+  return <canvas ref={ref} style={S.matrixCanvas} />
 }
 
-/* ─── Icons ─────────────────────────────────────────────────── */
-const ICONS = {
-  status:    '⬡',
-  molecules: '🔬',
-  life:      '✦',
-  targets:   '🧬',
-  network:   '🌐',
-  pulse:     '⚡',
-  art:       '🧠',
-  scout:     '🎯',
-  scoring:   '📊',
-  generated: '🔮',
-}
-
-/* ─── Family colors ─────────────────────────────────────────── */
-const FAMILY_COLORS = {
-  kinase:           T.purple,
-  cytokine:         '#f472b6',
-  protease:         '#fb923c',
-  nuclear_receptor: T.gold,
-  general:          T.blue,
-}
-
-/* ══════════════════════════════════════════════════════════════
-   PUBLIC PANELS
-   ══════════════════════════════════════════════════════════════ */
-
-/* ─── Miner Status panel ────────────────────────────────────── */
-function MinerStatusPanel({ alive, currentTarget, minerId }) {
+/* ─── DNA Helix SVG ─────────────────────────────────────────── */
+function DNAHelix() {
+  const pts = 14
   return (
-    <div style={S.panel}>
-      <div style={S.panelGlow} />
-      <div style={S.panelTitle}>
-        <span>{ICONS.status}</span> Miner Status
-      </div>
+    <svg width="320" height="64" viewBox="0 0 320 64" style={{ opacity: 0.7 }}>
+      <defs>
+        <filter id="gf">
+          <feGaussianBlur stdDeviation="1.5" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+      {/* top strand */}
+      <path
+        d={`M 0 32 ${Array.from({length:pts}, (_,i)=>{
+          const x = (i/pts)*320
+          const y = 32 + Math.sin((i/pts)*Math.PI*2)*20
+          return `${i===0?'':'L'} ${x} ${y}`
+        }).join(' ')}`}
+        fill="none" stroke={T.green} strokeWidth="1.5" filter="url(#gf)"
+        style={{animation:'helix1 3s linear infinite'}}
+      />
+      {/* bottom strand */}
+      <path
+        d={`M 0 32 ${Array.from({length:pts}, (_,i)=>{
+          const x = (i/pts)*320
+          const y = 32 - Math.sin((i/pts)*Math.PI*2)*20
+          return `${i===0?'':'L'} ${x} ${y}`
+        }).join(' ')}`}
+        fill="none" stroke={T.cyan} strokeWidth="1.5" filter="url(#gf)"
+        style={{animation:'helix1 3s linear infinite'}}
+      />
+      {/* rungs */}
+      {Array.from({length: pts}, (_, i) => {
+        const x = (i / pts) * 320 + 12
+        const y1 = 32 + Math.sin((i / pts) * Math.PI * 2) * 20
+        const y2 = 32 - Math.sin((i / pts) * Math.PI * 2) * 20
+        const t = Math.abs(Math.sin((i / pts) * Math.PI * 2))
+        return (
+          <line key={i} x1={x} y1={y1} x2={x} y2={y2}
+            stroke={t > 0.5 ? T.purple : T.green} strokeWidth="1" opacity={0.6 + t*0.4}
+            filter="url(#gf)"
+          />
+        )
+      })}
+    </svg>
+  )
+}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '20px' }}>
-        <div style={{
-          fontSize:     '28px',
-          fontWeight:   700,
-          color:        alive ? T.accent : T.warn,
-          textShadow:   alive ? `0 0 24px ${T.accent}` : `0 0 24px ${T.warn}`,
-          letterSpacing: '0.05em',
-        }}>
-          {alive ? '● ONLINE' : '○ OFFLINE'}
+/* ─── Uptime counter ────────────────────────────────────────── */
+function useUptime(lastUpdated) {
+  const [uptime, setUptime] = useState(0)
+  useEffect(() => {
+    const tick = () => {
+      if (!lastUpdated) return
+      const start = new Date(lastUpdated).getTime() - 60000 // approx daemon start
+      setUptime(Math.max(0, Math.floor((Date.now() - start) / 1000)))
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [lastUpdated])
+  const h = Math.floor(uptime / 3600), m = Math.floor((uptime % 3600) / 60), s = uptime % 60
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+}
+
+/* ─── Animated counter ──────────────────────────────────────── */
+function useAnimatedNumber(target, dur = 800) {
+  const [disp, setDisp] = useState(target)
+  const prev = useRef(target)
+  const raf  = useRef(null)
+  useEffect(() => {
+    const from = prev.current, diff = target - from
+    if (!diff) return
+    const t0 = performance.now()
+    const step = (now) => {
+      const t = Math.min((now - t0) / dur, 1)
+      const e = t < 0.5 ? 2*t*t : -1+(4-2*t)*t
+      setDisp(Math.round(from + diff * e))
+      if (t < 1) raf.current = requestAnimationFrame(step)
+      else { prev.current = target; setDisp(target) }
+    }
+    raf.current = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf.current)
+  }, [target, dur])
+  return disp
+}
+
+/* ─── Panel wrapper ─────────────────────────────────────────── */
+function Panel({ accent = T.green, style, children }) {
+  return (
+    <div style={{ ...S.panel(accent), ...style }}>
+      <div style={S.panelBar(accent)} />
+      <div style={S.panelCorner('tl', accent)} />
+      <div style={S.panelCorner('br', accent)} />
+      {children}
+    </div>
+  )
+}
+
+/* ─── SYSTEM STATUS panel ───────────────────────────────────── */
+function MinerStatusPanel({ alive, currentTarget, minerId, lastUpdated }) {
+  const uptime = useUptime(lastUpdated)
+  const lines = [
+    { label: 'SYS.STATUS', value: alive ? 'ONLINE' : 'OFFLINE', color: alive ? T.green : T.red },
+    { label: 'PROC.TARGET', value: currentTarget || 'AWAITING_JOB', color: T.cyan },
+    { label: 'NODE.UID', value: minerId && minerId !== '—' ? `${minerId.slice(0,8)}…${minerId.slice(-4)}` : 'UNREGISTERED', color: T.purple },
+    { label: 'SESSION.UPTIME', value: alive ? uptime : '--:--:--', color: T.green },
+  ]
+  return (
+    <Panel accent={alive ? T.green : T.red}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(T.green)}>◈</span>
+        <span>SYSTEM STATUS</span>
+        <span style={{ marginLeft: 'auto', ...S.pill(alive ? T.green : T.red) }}>
+          {alive ? 'ONLINE' : 'OFFLINE'}
+        </span>
+      </div>
+      {lines.map(({ label, value, color }) => (
+        <div key={label} style={S.kv}>
+          <span style={{ color: T.textDim, fontSize: '11px' }}>{label}</span>
+          <span style={{ color, fontWeight: 700, textShadow: glow(color, 3), fontSize: '12px' }}>{value}</span>
         </div>
+      ))}
+      <div style={{ marginTop: '14px', padding: '10px 12px', background: '#020902',
+                    border: `1px solid ${T.border}`, fontSize: '10px', color: T.textDim,
+                    letterSpacing: '0.06em', lineHeight: 1.8 }}>
+        <span style={{ color: T.green }}>{'>'}</span> LIFE-COMPUTE v2.0.0 INITIALIZED<br/>
+        <span style={{ color: T.green }}>{'>'}</span> BOLTZ2 GPU INFERENCE{' '}
+        <span style={{ color: T.cyan }}>ACTIVE</span><br/>
+        <span style={{ color: T.green }}>{'>'}</span> DRUG DISCOVERY SUBSTRATE LOADED
       </div>
-
-      <div style={S.kv}>
-        <span style={S.globalLabel}>Current Target</span>
-        <span style={{ color: T.accentDim, fontWeight: 600 }}>{currentTarget || '—'}</span>
-      </div>
-      <div style={{ ...S.kvLast, flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
-        <span style={S.globalLabel}>Miner UID</span>
-        <span style={{
-          color:     T.accentDim,
-          fontSize:  '13px',
-          fontWeight: 600,
-          marginTop: '4px',
-          letterSpacing: '0.04em',
-        }}>
-          {minerId && minerId !== '—'
-            ? `${minerId.slice(0, 8)}…${minerId.slice(-4)}`
-            : '—'}
-        </span>
-      </div>
-    </div>
+    </Panel>
   )
 }
 
-/* ─── Molecules panel ───────────────────────────────────────── */
+/* ─── Current molecule panel ────────────────────────────────── */
+function CurrentMoleculePanel({ pub, priv }) {
+  const history = pub?.scoring_history ?? []
+  const latest  = history[0]
+  const generated = priv?.generated ?? []
+  const recent  = generated.slice(0, 5)
+  return (
+    <Panel accent={T.cyan} style={{ gridColumn: 'span 2' }}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(T.cyan)}>⬡</span>
+        <span>LIVE MOLECULAR ANALYSIS</span>
+        <span style={{ marginLeft: 'auto', ...S.pill(T.cyan) }}>STREAMING</span>
+      </div>
+
+      {latest ? (
+        <div style={{ marginBottom: '16px', padding: '12px 14px', background: '#020a0a',
+                      border: `1px solid ${T.cyan}33`, borderRadius: '2px' }}>
+          <div style={{ fontSize: '10px', color: T.textDim, marginBottom: '6px',
+                        letterSpacing: '0.1em' }}>LAST SCORED — {latest.ts_iso?.slice(11,19) ?? '??:??:??'}</div>
+          <div style={{ fontSize: '11px', color: T.cyan, textShadow: glow(T.cyan, 2),
+                        wordBreak: 'break-all', fontFamily: T.mono, lineHeight: 1.6 }}>
+            {latest.target_id ? `[TARGET:${latest.target_id}]` : ''}
+          </div>
+          <div style={{ marginTop: '8px', display: 'flex', gap: '16px' }}>
+            <div>
+              <div style={{ fontSize: '22px', fontWeight: 700, color: T.cyan,
+                            textShadow: glow(T.cyan, 4) }}>
+                {latest.best_score !== null ? latest.best_score.toFixed(4) : '—'}
+              </div>
+              <div style={S.label}>affinity score</div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ padding: '12px 14px', background: '#020a0a', border: `1px solid ${T.border}`,
+                      color: T.textDim, fontSize: '11px', marginBottom: '16px' }}>
+          AWAITING FIRST BOLTZ2 EVALUATION…
+          <span style={{ animation: 'blink 1s step-end infinite', color: T.green }}> █</span>
+        </div>
+      )}
+
+      <div style={{ fontSize: '10px', color: T.textDim, letterSpacing: '0.12em',
+                    marginBottom: '8px' }}>RECENT MOLECULES EVALUATED</div>
+      {recent.length > 0 ? recent.map((r, i) => (
+        <div key={i} style={S.terminalLine}>
+          <span style={S.prompt}>$</span>
+          <span style={S.smiles}>{r.smiles ?? '—'}</span>
+          <span style={{ color: r.boltz_score != null ? T.green : T.textDim, flexShrink: 0,
+                         fontSize: '11px', textShadow: r.boltz_score != null ? glow(T.green,2) : 'none' }}>
+            {r.boltz_score != null ? r.boltz_score.toFixed(4) : '—'}
+          </span>
+          <span style={{ ...S.pill(T.purple), flexShrink: 0 }}>
+            {(r.method ?? 'scan').slice(0, 8)}
+          </span>
+        </div>
+      )) : (
+        <div style={{ color: T.textDim, fontSize: '11px' }}>
+          INITIALIZING MOLECULAR SWEEP
+          <span style={{ animation: 'blink 0.8s step-end infinite', color: T.green }}> █</span>
+        </div>
+      )}
+    </Panel>
+  )
+}
+
+/* ─── Molecules screened panel ──────────────────────────────── */
 function MoleculesPanel({ count }) {
-  const animated = useAnimatedNumber(count)
+  const n = useAnimatedNumber(count)
   return (
-    <div style={S.panel}>
-      <div style={S.panelGlow} />
+    <Panel accent={T.green}>
       <div style={S.panelTitle}>
-        <span>{ICONS.molecules}</span> Molecules Screened
+        <span style={S.titleAccent(T.green)}>◉</span>
+        <span>MOLECULES SCREENED</span>
       </div>
-      <div style={S.bigNumber}>{animated.toLocaleString()}</div>
-      <div style={S.label}>candidate drug molecules evaluated this session</div>
-    </div>
+      <div style={S.bigNum(T.green)}>{n.toLocaleString()}</div>
+      <div style={{ ...S.label, marginBottom: '12px' }}>drug candidate evaluations completed</div>
+      <div style={{ height: '2px', background: `linear-gradient(90deg, ${T.green}, ${T.cyan}, ${T.purple})`,
+                    boxShadow: `0 0 8px ${T.green}`, borderRadius: '1px' }} />
+    </Panel>
   )
 }
 
-/* ─── $LIFE Earned panel ────────────────────────────────────── */
+/* ─── $LIFE earned panel ────────────────────────────────────── */
 function LifeEarnedPanel({ earned }) {
-  const animated = useAnimatedNumber(Math.floor(earned))
+  const n = useAnimatedNumber(Math.floor(earned))
   return (
-    <div style={S.panel}>
-      <div style={S.panelGlow} />
+    <Panel accent={T.purple}>
       <div style={S.panelTitle}>
-        <span>{ICONS.life}</span> $LIFE Earned
+        <span style={S.titleAccent(T.purple)}>✦</span>
+        <span>$LIFE EARNED</span>
       </div>
-      <div style={{ ...S.bigNumber, color: '#ffe066', textShadow: '0 0 32px rgba(255,224,102,0.2)' }}>
-        {animated.toLocaleString()}
-        <span style={{ fontSize: '22px', marginLeft: '8px', color: '#b8a040' }}>LIFE</span>
-      </div>
-      <div style={S.label}>1 $LIFE minted per verified on-chain submission</div>
-    </div>
+      <div style={S.bigNum(T.purple)}>{n.toLocaleString()}</div>
+      <div style={{ fontSize: '18px', color: T.purpleDim, marginTop: '-4px', marginBottom: '8px',
+                    textShadow: glow(T.purple, 3) }}>LIFE TOKENS</div>
+      <div style={{ ...S.label, marginBottom: '12px' }}>minted on-chain for verified discoveries</div>
+      <div style={{ height: '2px', background: `linear-gradient(90deg, ${T.purple}, ${T.cyan})`,
+                    boxShadow: `0 0 8px ${T.purple}`, borderRadius: '1px' }} />
+    </Panel>
   )
 }
 
-/* ─── Targets Contributed panel ─────────────────────────────── */
+/* ─── Cancer targets panel ──────────────────────────────────── */
 function TargetsPanel({ targets }) {
+  const GENES = ['TP53', 'BRCA1', 'EGFR', 'HER2', 'KRAS', 'BCL2', 'CDK4', 'VEGFR2', 'PDL1', 'MDM2']
   return (
-    <div style={S.panel}>
-      <div style={S.panelGlow} />
+    <Panel accent={T.cyan}>
       <div style={S.panelTitle}>
-        <span>{ICONS.targets}</span> Cancer Targets Contributed To
-        <span style={{ marginLeft: 'auto', color: T.accent, fontSize: '16px' }}>
-          {targets.length}
-        </span>
+        <span style={S.titleAccent(T.cyan)}>⬡</span>
+        <span>ACTIVE PROTEIN TARGETS</span>
+        <span style={{ marginLeft: 'auto', color: T.cyan, textShadow: glow(T.cyan, 3),
+                        fontWeight: 700 }}>{targets.length}</span>
       </div>
       {targets.length === 0 ? (
-        <div style={S.label}>Starting first screening cycle…</div>
+        <div style={{ ...S.label, padding: '8px 0' }}>
+          AWAITING FIRST TARGET ASSIGNMENT
+          <span style={{ animation: 'blink 1s step-end infinite', color: T.green }}> █</span>
+        </div>
       ) : (
-        <ul style={S.targetList}>
-          {targets.map((t, i) => (
-            <li key={i} style={S.targetItem}>
-              <div style={S.targetDot} />
-              <span>{t}</span>
-            </li>
-          ))}
-        </ul>
+        targets.map((t, i) => (
+          <div key={i} style={S.targetItem}>
+            <div style={S.targetPip} />
+            <span style={{ color: T.cyan, fontWeight: 700, textShadow: glow(T.cyan, 2) }}>{t}</span>
+            <span style={{ marginLeft: 'auto', ...S.pill(T.green) }}>ACTIVE</span>
+          </div>
+        ))
       )}
-    </div>
+      {GENES.filter(g => !targets.includes(g)).slice(0, 3).map((g, i) => (
+        <div key={g} style={{ ...S.targetItem, opacity: 0.3, border: `1px solid ${T.border}` }}>
+          <div style={{ ...S.targetPip, background: T.textDim, boxShadow: 'none', animation: 'none' }} />
+          <span style={{ color: T.textDim }}>{g}</span>
+          <span style={{ marginLeft: 'auto', ...S.pill(T.textDim) }}>LOCKED</span>
+        </div>
+      ))}
+    </Panel>
   )
 }
 
-/* ─── Scoring History panel (public — best score per epoch) ── */
+/* ─── Scoring history panel ─────────────────────────────────── */
 function ScoringHistoryPanel({ history }) {
-  if (!history || history.length === 0) return (
-    <div style={S.panel}>
-      <div style={S.panelGlow} />
-      <div style={S.panelTitle}><span>{ICONS.scoring}</span> Scoring History</div>
-      <div style={S.label}>No scores yet — accumulating Boltz2 evaluations…</div>
-    </div>
-  )
+  const canvasRef = useRef()
+  const scores = (history ?? []).filter(r => r.best_score != null).map(r => r.best_score)
 
-  const scores  = history.filter(r => r.best_score !== null).map(r => r.best_score)
-  const best    = scores.length ? Math.max(...scores) : null
-  const avg     = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || scores.length < 2) return
+    const ctx = canvas.getContext('2d')
+    const w = canvas.width, h = canvas.height
+    ctx.clearRect(0, 0, w, h)
+    const mn = Math.min(...scores) * 0.95, mx = Math.max(...scores) * 1.05
+    const toY = v => h - ((v - mn) / (mx - mn)) * (h - 8) - 4
+    const toX = i => (i / (scores.length - 1)) * w
+
+    // grid lines
+    ctx.strokeStyle = '#00ff4110'; ctx.lineWidth = 1
+    for (let i = 0; i <= 4; i++) {
+      const y = (i / 4) * h
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke()
+    }
+
+    // glow fill
+    const grad = ctx.createLinearGradient(0, 0, 0, h)
+    grad.addColorStop(0, '#00ff4130'); grad.addColorStop(1, '#00ff4100')
+    ctx.fillStyle = grad
+    ctx.beginPath(); ctx.moveTo(toX(0), h)
+    scores.forEach((s, i) => ctx.lineTo(toX(i), toY(s)))
+    ctx.lineTo(toX(scores.length-1), h); ctx.closePath(); ctx.fill()
+
+    // line
+    ctx.strokeStyle = T.green; ctx.lineWidth = 2
+    ctx.shadowColor = T.green; ctx.shadowBlur = 8
+    ctx.beginPath()
+    scores.forEach((s, i) => i === 0 ? ctx.moveTo(toX(i), toY(s)) : ctx.lineTo(toX(i), toY(s)))
+    ctx.stroke()
+
+    // dots
+    scores.forEach((s, i) => {
+      ctx.fillStyle = T.cyan; ctx.shadowColor = T.cyan; ctx.shadowBlur = 6
+      ctx.beginPath(); ctx.arc(toX(i), toY(s), 2.5, 0, Math.PI*2); ctx.fill()
+    })
+  }, [scores])
+
+  const best = scores.length ? Math.max(...scores) : null
+  const avg  = scores.length ? scores.reduce((a,b) => a+b, 0) / scores.length : null
 
   return (
-    <div style={S.panel}>
-      <div style={S.panelGlow} />
+    <Panel accent={T.green}>
       <div style={S.panelTitle}>
-        <span>{ICONS.scoring}</span> Scoring History
-        <span style={{ marginLeft: 'auto', color: T.accent }}>{history.length} epochs</span>
+        <span style={S.titleAccent(T.green)}>▲</span>
+        <span>SCORING HISTORY</span>
+        <span style={{ marginLeft: 'auto', color: T.textDim, fontSize: '10px' }}>{scores.length} pts</span>
       </div>
 
-      <div style={{ display: 'flex', gap: '24px', marginBottom: '16px' }}>
+      <div style={{ display: 'flex', gap: '28px', marginBottom: '14px' }}>
         <div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: T.accent, lineHeight: 1 }}>
-            {best !== null ? best.toFixed(4) : '—'}
-          </div>
-          <div style={S.label}>best score</div>
-        </div>
-        <div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: T.accentDim, lineHeight: 1 }}>
-            {avg !== null ? avg.toFixed(4) : '—'}
-          </div>
-          <div style={S.label}>epoch avg</div>
-        </div>
-      </div>
-
-      <div style={{ ...S.scoreRow, color: T.muted, borderBottom: `1px solid ${T.border}`,
-                    paddingBottom: '6px', marginBottom: '2px' }}>
-        <span>TIME</span><span>Best Score</span><span>Target</span><span></span>
-      </div>
-
-      <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-        {history.map((r, i) => (
-          <div key={i} style={S.scoreRow}>
-            <span style={{ color: T.textDim }}>{r.ts_iso ? r.ts_iso.slice(11, 19) : '—'}</span>
-            <span style={{ color: r.best_score !== null ? T.accent : T.muted, fontWeight: 600 }}>
-              {r.best_score !== null ? r.best_score.toFixed(4) : '—'}
-            </span>
-            <span style={{ color: T.accentDim }}>{r.target_id || '?'}</span>
-            <span />
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-/* ─── Global Network panel ──────────────────────────────────────── */
-function NetworkPanel({ network }) {
-  const fmt = (v) => v != null ? v.toLocaleString() : '—'
-  return (
-    <div style={S.panel}>
-      <div style={S.panelGlow} />
-      <div style={S.panelTitle}>
-        <span>{ICONS.network}</span> Global Network
-        <span style={{ marginLeft: 'auto', fontSize: '10px', color: T.textDim }}>on-chain</span>
-      </div>
-
-      <div style={S.globalRow}>
-        <span style={S.globalLabel}>Total Miners Online</span>
-        <span style={{ ...S.globalValue, color: network?.total_miners != null ? T.accent : T.muted }}>
-          {fmt(network?.total_miners)}
-        </span>
-      </div>
-      <div style={S.globalRow}>
-        <span style={S.globalLabel}>Global Molecules Screened</span>
-        <span style={{ ...S.globalValue, color: network?.molecules_screened != null ? T.accent : T.muted }}>
-          {fmt(network?.molecules_screened)}
-        </span>
-      </div>
-      <div style={{ ...S.globalRow, borderBottom: 'none' }}>
-        <span style={S.globalLabel}>Confirmed Hits (all targets)</span>
-        <span style={{ ...S.globalValue, color: network?.targets_solved != null ? T.accent : T.muted }}>
-          {fmt(network?.targets_solved)}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-/* ══════════════════════════════════════════════════════════════
-   PRIVATE PANELS  (only shown when isLocalhost = true)
-   ══════════════════════════════════════════════════════════════ */
-
-function PrivateNote() {
-  return (
-    <div style={S.privateNote}>
-      🔒 Local diagnostics — not shared with network
-    </div>
-  )
-}
-
-/* ─── LIFE PULSE panel ───────────────────────────────────────── */
-function PulsePanel({ pulse }) {
-  if (!pulse) return null
-  const { sobol_index = 0, total_evaluated = 0, top_proxy_score = 0, family_counts = {}, recent = [] } = pulse
-  return (
-    <div style={S.privatePanel}>
-      <div style={S.panelGlowPrivate} />
-      <div style={S.panelTitle}>
-        <span>{ICONS.pulse}</span> LIFE PULSE
-        <span style={{ marginLeft: 'auto', ...S.pill(T.purple) }}>SOBOL</span>
-      </div>
-      <PrivateNote />
-
-      <div style={{ display: 'flex', gap: '32px', marginBottom: '16px' }}>
-        <div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: T.purple, lineHeight: 1 }}>
-            {sobol_index.toLocaleString()}
-          </div>
-          <div style={S.label}>exploration index</div>
+          <div style={{ fontSize: '26px', fontWeight: 700, color: T.green, lineHeight: 1,
+                        textShadow: glow(T.green, 5) }}>{best !== null ? best.toFixed(4) : '—'}</div>
+          <div style={S.label}>peak score</div>
         </div>
         <div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: T.accentDim, lineHeight: 1 }}>
-            {total_evaluated.toLocaleString()}
-          </div>
-          <div style={S.label}>molecules swept</div>
-        </div>
-        <div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: T.accentDim, lineHeight: 1 }}>
-            {top_proxy_score.toFixed(3)}
-          </div>
-          <div style={S.label}>best proxy score</div>
+          <div style={{ fontSize: '26px', fontWeight: 700, color: T.cyan, lineHeight: 1,
+                        textShadow: glow(T.cyan, 3) }}>{avg !== null ? avg.toFixed(4) : '—'}</div>
+          <div style={S.label}>mean score</div>
         </div>
       </div>
 
-      <div style={{ ...S.panelTitle, marginBottom: '8px' }}>Sobol State — Family Distribution</div>
-      <div style={S.familyBar}>
-        {Object.entries(family_counts).map(([fam, cnt]) => (
-          <span key={fam} style={S.pill(FAMILY_COLORS[fam] || T.textDim)}>
-            {fam.replace('_', ' ')} {cnt}
-          </span>
-        ))}
-        {Object.keys(family_counts).length === 0 &&
-          <span style={{ color: T.textDim, fontSize: '12px' }}>Sweep starting…</span>}
-      </div>
+      <canvas ref={canvasRef} width={340} height={100} style={{ width: '100%', height: '100px',
+        border: `1px solid ${T.border}`, background: '#020902', display: 'block' }} />
 
-      {recent.length > 0 && (
-        <>
-          <div style={{ ...S.panelTitle, marginTop: '16px', marginBottom: '8px' }}>Recent Molecules</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '140px', overflowY: 'auto' }}>
-            {recent.map((r, i) => (
-              <div key={i} style={{ display: 'flex', gap: '8px', alignItems: 'center',
-                                    padding: '4px 0', borderBottom: '1px solid #1a0a2a', fontSize: '11px' }}>
-                <span style={S.pill(FAMILY_COLORS[r.family] || T.muted)}>{r.family?.slice(0, 4)}</span>
-                <span style={{ color: T.textDim, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis',
-                               whiteSpace: 'nowrap' }}>{r.smiles}</span>
-                <span style={{ color: T.accentDim, flexShrink: 0 }}>{r.proxy_score?.toFixed(3)}</span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  )
-}
-
-/* ─── LIFE ART panel ─────────────────────────────────────────── */
-function ArtPanel({ art }) {
-  if (!art) return null
-  const {
-    ready = false,
-    n_rows = 0,
-    r2 = null,
-    reason = '—',
-    boltz_accumulated = 0,
-    retrain_progress = 0,
-    next_retrain_in = 50,
-    n_features = 525,
-    feature_importances = {},
-  } = art
-
-  const topFeatures = Object.entries(feature_importances)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-
-  return (
-    <div style={S.privatePanel}>
-      <div style={S.panelGlowPrivate} />
-      <div style={S.panelTitle}>
-        <span>{ICONS.art}</span> LIFE ART
-        <span style={{ marginLeft: 'auto', ...S.pill(ready ? T.accent : T.warn) }}>
-          {ready ? 'MODEL LIVE' : 'TRAINING'}
-        </span>
-      </div>
-      <PrivateNote />
-
-      <div style={S.kv}>
-        <span style={S.globalLabel}>Model Ready</span>
-        <span style={{ color: ready ? T.accent : T.warn, fontWeight: 600 }}>
-          {ready ? '✓ Deployed' : '✗ Awaiting data'}
-        </span>
-      </div>
-      <div style={S.kv}>
-        <span style={S.globalLabel}>Training Rows (Boltz2 scored)</span>
-        <span style={{ color: T.text, fontWeight: 600 }}>{n_rows} / 50</span>
-      </div>
-      <div style={S.kv}>
-        <span style={S.globalLabel}>5-fold CV R²</span>
-        <span style={{ color: r2 !== null ? (r2 >= 0.25 ? T.accent : T.warn) : T.muted }}>
-          {r2 !== null ? r2.toFixed(3) : '—'}
-        </span>
-      </div>
-      <div style={S.kv}>
-        <span style={S.globalLabel}>Feature Dimensions</span>
-        <span style={{ color: T.blue }}>
-          512-bit Morgan FP + 13 phys-chem = {n_features}
-        </span>
-      </div>
-      <div style={S.kv}>
-        <span style={S.globalLabel}>Total Boltz2 Scores</span>
-        <span style={{ color: T.text }}>{boltz_accumulated}</span>
-      </div>
-      <div style={{ ...S.kvLast, flexDirection: 'column', alignItems: 'stretch' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-          <span style={S.globalLabel}>Next retrain in</span>
-          <span style={{ color: T.purple, fontSize: '13px' }}>{next_retrain_in} scores</span>
-        </div>
-        <div style={S.progressBar(retrain_progress, T.purple)}>
-          <div style={S.progressFill(retrain_progress, T.purple)} />
-        </div>
-      </div>
-
-      {topFeatures.length > 0 && (
-        <div style={{ marginTop: '14px' }}>
-          <div style={{ ...S.panelTitle, marginBottom: '6px' }}>Top Feature Importances</div>
-          {topFeatures.map(([feat, imp]) => (
-            <div key={feat} style={{ ...S.kv, borderBottom: '1px solid #1a0a2a' }}>
-              <span style={{ color: T.textDim, fontSize: '11px' }}>{feat}</span>
-              <span style={{ color: T.privateAccent, fontSize: '11px' }}>{imp.toFixed(3)}</span>
+      {history.length > 0 && (
+        <div style={{ marginTop: '12px', maxHeight: '140px', overflowY: 'auto' }}>
+          {history.slice(0, 8).map((r, i) => (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '80px 1fr 60px',
+                                   gap: '8px', padding: '5px 0', borderBottom: `1px solid #0a150a`,
+                                   fontSize: '10px', alignItems: 'center' }}>
+              <span style={{ color: T.textDim }}>{r.ts_iso?.slice(11,19) ?? '??:??:??'}</span>
+              <span style={{ color: T.cyan }}>[{r.target_id ?? '?'}]</span>
+              <span style={{ color: r.best_score != null ? T.green : T.textDim, fontWeight: 700,
+                              textShadow: r.best_score != null ? glow(T.green, 2) : 'none',
+                              textAlign: 'right' }}>
+                {r.best_score != null ? r.best_score.toFixed(4) : '—'}
+              </span>
             </div>
           ))}
         </div>
       )}
 
-      {!ready && (
-        <div style={{ marginTop: '14px', padding: '10px 14px', background: '#0d0d1a',
-                      borderRadius: '8px', border: `1px solid ${T.blue}22`, fontSize: '12px',
-                      color: T.textDim, lineHeight: 1.5 }}>
-          {reason}. ART auto-deploys when n ≥ 50 scored molecules and 5-fold R² ≥ 0.25.
+      {!history.length && (
+        <div style={{ ...S.label, marginTop: '8px' }}>
+          ACCUMULATING BOLTZ2 EVALUATIONS
+          <span style={{ animation: 'blink 0.8s step-end infinite', color: T.green }}> █</span>
         </div>
       )}
-    </div>
+    </Panel>
   )
 }
 
-/* ─── LIFE SCOUT panel ───────────────────────────────────────── */
-const PHASE_COLORS = { explore: T.blue, exploit: T.accent, refine: T.purple }
-
-function ScoutPanel({ scout, priv }) {
-  if (!scout) return null
-  const {
-    last_family = '—',
-    last_phase  = '—',
-    n_diverse   = 0,
-    n_passed_filter = 0,
-    best_score  = null,
-    target_id   = '—',
-  } = scout
-
-  const phaseColor = PHASE_COLORS[last_phase] || T.textDim
-  const artReady   = priv?.art?.ready ?? false
-
+/* ─── Global network panel ──────────────────────────────────── */
+function NetworkPanel({ network }) {
+  const fmt = v => v != null ? v.toLocaleString() : '—'
+  const rows = [
+    { label: 'MINERS_ONLINE',   value: fmt(network?.total_miners),      color: T.green },
+    { label: 'GLOBAL_SCREENED', value: fmt(network?.molecules_screened), color: T.cyan },
+    { label: 'CONFIRMED_HITS',  value: fmt(network?.targets_solved),     color: T.purple },
+  ]
   return (
-    <div style={S.privatePanel}>
-      <div style={S.panelGlowPrivate} />
+    <Panel accent={T.cyan}>
       <div style={S.panelTitle}>
-        <span>{ICONS.scout}</span> LIFE SCOUT
-        {last_phase !== '—' && (
-          <span style={{ ...S.pill(phaseColor), marginLeft: 'auto' }}>
-            {last_phase.toUpperCase()}
+        <span style={S.titleAccent(T.cyan)}>◈</span>
+        <span>GLOBAL NETWORK MONITOR</span>
+        <span style={{ marginLeft: 'auto', ...S.pill(T.cyan) }}>ON-CHAIN</span>
+      </div>
+      {rows.map(({ label, value, color }) => (
+        <div key={label} style={S.globalRow}>
+          <span style={{ color: T.textDim, fontSize: '11px', letterSpacing: '0.1em' }}>{label}</span>
+          <span style={{ fontSize: '20px', fontWeight: 700, color,
+                          textShadow: glow(color, 4), fontVariantNumeric: 'tabular-nums' }}>
+            {value}
           </span>
-        )}
-      </div>
-      <PrivateNote />
-
-      <div style={S.kv}>
-        <span style={S.globalLabel}>Protein Family Routing</span>
-        <span style={{ color: FAMILY_COLORS[last_family] || T.text, fontWeight: 600 }}>
-          {last_family.replace('_', ' ')}
-        </span>
-      </div>
-      <div style={S.kv}>
-        <span style={S.globalLabel}>Target</span>
-        <span style={{ color: T.accentDim }}>{target_id}</span>
-      </div>
-      <div style={S.kv}>
-        <span style={S.globalLabel}>Library Choice (passed filter)</span>
-        <span style={{ color: T.text }}>{n_passed_filter}</span>
-      </div>
-      <div style={S.kv}>
-        <span style={S.globalLabel}>Diverse Candidates Returned</span>
-        <span style={{ color: T.accent, fontWeight: 600 }}>{n_diverse}</span>
-      </div>
-      <div style={S.kv}>
-        <span style={S.globalLabel}>Best Predicted Score</span>
-        <span style={{ color: best_score !== null ? T.accent : T.muted }}>
-          {best_score !== null ? best_score.toFixed(4) : '—'}
-        </span>
-      </div>
-      <div style={{ ...S.kvLast, gap: '8px', flexWrap: 'wrap' }}>
-        <span style={S.globalLabel}>Routing Decision</span>
-        <div style={{ display: 'flex', gap: '6px', marginLeft: 'auto' }}>
-          {['explore', 'exploit', 'refine'].map(p => (
-            <span key={p} style={{
-              ...S.pill(PHASE_COLORS[p]),
-              opacity: last_phase === p ? 1 : 0.3,
-              fontWeight: last_phase === p ? 700 : 400,
-            }}>{p}</span>
-          ))}
         </div>
+      ))}
+      <div style={{ marginTop: '14px', padding: '10px 12px', background: '#020a09',
+                    border: `1px solid ${T.cyan}22`, fontSize: '10px', lineHeight: 1.8,
+                    color: T.textDim, letterSpacing: '0.06em' }}>
+        <span style={{ color: T.cyan }}>{'>'}</span> SOLANA DEVNET — RPC CONNECTED<br/>
+        <span style={{ color: T.cyan }}>{'>'}</span> PROGRAM:{' '}
+        <span style={{ color: T.green, fontSize: '9px' }}>DzcQHhTPuiq…WsKvJ</span><br/>
+        <span style={{ color: T.cyan }}>{'>'}</span> CONSENSUS: 2-OF-N VALIDATORS
       </div>
+    </Panel>
+  )
+}
 
-      <div style={{ marginTop: '14px', padding: '10px 14px', background: '#0d130d',
-                    borderRadius: '8px', border: `1px solid ${T.border}`, fontSize: '12px',
-                    color: T.textDim, lineHeight: 1.6 }}>
-        <span style={{ color: T.accent }}>Ranking:</span>{' '}
-        {artReady ? 'ART model (Morgan FP + physchem RF)' : 'Proxy scorer (ha + logP)'}
-        {' · '}
-        <span style={{ color: T.accent }}>Filter:</span>{' '}
-        {last_family !== '—' ? `${last_family.replace('_', ' ')} pharmacophore` : 'Lipinski Ro5'}
-        {' · '}
-        <span style={{ color: T.accent }}>Diversity:</span> Tanimoto ≥ 0.65 rejected
-      </div>
+/* ─── Private panels ────────────────────────────────────────── */
+function PrivateNote() {
+  return (
+    <div style={{ fontSize: '9px', color: T.purple, background: '#0d0020',
+                  border: `1px solid ${T.purple}33`, padding: '3px 8px',
+                  marginBottom: '14px', letterSpacing: '0.1em', display: 'inline-block',
+                  textShadow: glow(T.purple, 2) }}>
+      🔒 LOCAL DIAGNOSTICS — NOT BROADCAST
     </div>
   )
 }
 
-/* ─── Generated Molecules panel ─────────────────────────────── */
-function GeneratedPanel({ generated }) {
-  if (!generated || generated.length === 0) return (
-    <div style={S.privatePanel}>
-      <div style={S.panelGlowPrivate} />
-      <div style={S.panelTitle}><span>{ICONS.generated}</span> Generated Molecules</div>
-      <PrivateNote />
-      <div style={S.label}>No generated molecules yet — generative phase starting…</div>
-    </div>
-  )
-
+function PulsePanel({ pulse }) {
+  if (!pulse) return null
+  const { sobol_index = 0, total_evaluated = 0, top_proxy_score = 0, family_counts = {}, recent = [] } = pulse
+  const FCOL = { kinase: T.purple, cytokine: '#ff69b4', protease: '#ff8c00', nuclear_receptor: T.cyan, general: T.green }
   return (
-    <div style={S.privatePanel}>
-      <div style={S.panelGlowPrivate} />
+    <Panel accent={T.purple}>
       <div style={S.panelTitle}>
-        <span>{ICONS.generated}</span> Generated Molecules
-        <span style={{ marginLeft: 'auto', color: T.privateAccent }}>{generated.length} recent</span>
+        <span style={S.titleAccent(T.purple)}>⚡</span>
+        <span>LIFE PULSE — SOBOL SWEEP</span>
       </div>
       <PrivateNote />
-
-      <div style={{ ...S.generatedRow, color: T.muted, borderBottom: `1px solid ${T.privateBorder}`,
-                    paddingBottom: '6px', marginBottom: '2px' }}>
-        <span>SMILES</span><span>ART Score</span><span>Boltz</span><span>Method</span>
-      </div>
-
-      <div style={{ maxHeight: '240px', overflowY: 'auto' }}>
-        {generated.map((r, i) => (
-          <div key={i} style={S.generatedRow}>
-            <span style={{ color: T.textDim, overflow: 'hidden', textOverflow: 'ellipsis',
-                           whiteSpace: 'nowrap' }}>{r.smiles || '—'}</span>
-            <span style={{ color: r.art_score !== null ? T.privateAccent : T.muted, fontWeight: 600 }}>
-              {r.art_score !== null ? r.art_score.toFixed(3) : '—'}
-            </span>
-            <span style={{ color: r.boltz_score !== null ? T.accent : T.muted }}>
-              {r.boltz_score !== null ? r.boltz_score.toFixed(4) : '—'}
-            </span>
-            <span style={{ color: T.textDim, fontSize: '10px' }}>{(r.method || '').slice(0, 12)}</span>
+      <div style={{ display: 'flex', gap: '24px', marginBottom: '14px' }}>
+        {[
+          { v: sobol_index.toLocaleString(), l: 'exploration index', c: T.purple },
+          { v: total_evaluated.toLocaleString(), l: 'swept', c: T.cyan },
+          { v: top_proxy_score.toFixed(3), l: 'best proxy', c: T.green },
+        ].map(({ v, l, c }) => (
+          <div key={l}>
+            <div style={{ fontSize: '24px', fontWeight: 700, color: c, textShadow: glow(c, 4) }}>{v}</div>
+            <div style={S.label}>{l}</div>
           </div>
         ))}
       </div>
-    </div>
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
+        {Object.entries(family_counts).map(([fam, cnt]) => (
+          <span key={fam} style={S.pill(FCOL[fam] ?? T.textDim)}>{fam.replace('_',' ')} {cnt}</span>
+        ))}
+      </div>
+      {recent.slice(0, 5).map((r, i) => (
+        <div key={i} style={S.terminalLine}>
+          <span style={S.prompt}>{'>'}</span>
+          <span style={S.smiles}>{r.smiles}</span>
+          <span style={{ color: T.green, flexShrink: 0, fontSize: '11px' }}>{r.proxy_score?.toFixed(3)}</span>
+        </div>
+      ))}
+    </Panel>
   )
 }
 
-/* ─── Global CSS ────────────────────────────────────────────── */
+function ArtPanel({ art }) {
+  if (!art) return null
+  const { ready=false, n_rows=0, r2=null, reason='—', boltz_accumulated=0,
+          retrain_progress=0, next_retrain_in=50, feature_importances={} } = art
+  const top5 = Object.entries(feature_importances).sort((a,b)=>b[1]-a[1]).slice(0,5)
+  return (
+    <Panel accent={T.purple}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(T.purple)}>🧠</span>
+        <span>LIFE ART — ML SCORER</span>
+        <span style={{ marginLeft:'auto', ...S.pill(ready ? T.green : T.red) }}>
+          {ready ? 'DEPLOYED' : 'TRAINING'}
+        </span>
+      </div>
+      <PrivateNote />
+      {[
+        { k: 'MODEL_READY', v: ready ? '✓ ACTIVE' : '✗ PENDING', c: T.green },
+        { k: 'TRAINING_ROWS', v: `${n_rows} / 50`, c: T.cyan },
+        { k: 'CV_R2_SCORE', v: r2 != null ? r2.toFixed(3) : '—', c: r2 != null && r2 >= 0.25 ? T.green : T.red },
+        { k: 'BOLTZ2_SCORED', v: boltz_accumulated, c: T.text },
+      ].map(({ k, v, c }) => (
+        <div key={k} style={S.kv}>
+          <span style={{ color: T.textDim, fontSize: '11px' }}>{k}</span>
+          <span style={{ color: c, fontWeight: 700, textShadow: glow(c, 2) }}>{v}</span>
+        </div>
+      ))}
+      <div style={{ marginTop: '8px' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px', fontSize:'11px' }}>
+          <span style={{ color: T.textDim }}>NEXT_RETRAIN</span>
+          <span style={{ color: T.purple }}>{next_retrain_in} scores remaining</span>
+        </div>
+        <div style={S.progressTrack}>
+          <div style={{ position:'absolute', top:0, left:0, height:'100%',
+                        width:`${retrain_progress}%`, background: T.purple,
+                        boxShadow: `0 0 6px ${T.purple}`, transition:'width 0.8s ease' }} />
+        </div>
+      </div>
+      {top5.length > 0 && (
+        <div style={{ marginTop:'12px' }}>
+          <div style={{ ...S.label, marginBottom:'6px', letterSpacing:'0.12em' }}>TOP FEATURES</div>
+          {top5.map(([f, imp]) => (
+            <div key={f} style={{ ...S.kv, borderBottom:`1px solid #0a0a1a` }}>
+              <span style={{ color: T.textDim, fontSize:'10px' }}>{f}</span>
+              <span style={{ color: T.purple, fontSize:'10px' }}>{imp.toFixed(3)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  )
+}
+
+function ScoutPanel({ scout, priv }) {
+  if (!scout) return null
+  const { last_family='—', last_phase='—', n_diverse=0, n_passed_filter=0, best_score=null, target_id='—' } = scout
+  const PC = { explore: T.cyan, exploit: T.green, refine: T.purple }
+  const pc = PC[last_phase] ?? T.textDim
+  return (
+    <Panel accent={T.cyan}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(T.cyan)}>🎯</span>
+        <span>LIFE SCOUT — ROUTING</span>
+        {last_phase !== '—' && <span style={{ marginLeft:'auto', ...S.pill(pc) }}>{last_phase.toUpperCase()}</span>}
+      </div>
+      <PrivateNote />
+      {[
+        { k: 'PROTEIN_FAMILY', v: last_family.replace('_',' '), c: T.purple },
+        { k: 'ACTIVE_TARGET', v: target_id, c: T.cyan },
+        { k: 'CANDIDATES_PASSED', v: n_passed_filter, c: T.text },
+        { k: 'DIVERSE_RETURNED', v: n_diverse, c: T.green },
+        { k: 'BEST_PRED_SCORE', v: best_score != null ? best_score.toFixed(4) : '—', c: T.green },
+      ].map(({ k, v, c }) => (
+        <div key={k} style={S.kv}>
+          <span style={{ color: T.textDim, fontSize:'11px' }}>{k}</span>
+          <span style={{ color: c, fontWeight: 700 }}>{v}</span>
+        </div>
+      ))}
+      <div style={{ marginTop:'12px', display:'flex', gap:'6px' }}>
+        {['explore','exploit','refine'].map(p => (
+          <span key={p} style={{ ...S.pill(PC[p]), opacity: last_phase===p ? 1 : 0.3,
+                                  fontWeight: last_phase===p ? 700 : 400 }}>{p}</span>
+        ))}
+      </div>
+    </Panel>
+  )
+}
+
+function GeneratedPanel({ generated }) {
+  if (!generated?.length) return (
+    <Panel accent={T.purple}>
+      <div style={S.panelTitle}><span style={S.titleAccent(T.purple)}>🔮</span><span>GENERATED MOLECULES</span></div>
+      <PrivateNote />
+      <div style={S.label}>GENERATIVE PHASE PENDING — STARTING IN FINAL 15% OF EPOCH</div>
+    </Panel>
+  )
+  return (
+    <Panel accent={T.purple}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(T.purple)}>🔮</span>
+        <span>GENERATED MOLECULES</span>
+        <span style={{ marginLeft:'auto', color: T.purple }}>{generated.length} recent</span>
+      </div>
+      <PrivateNote />
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 80px 70px 70px', gap:'6px',
+                    fontSize:'9px', color: T.textDim, letterSpacing:'0.1em',
+                    padding:'4px 0', borderBottom:`1px solid ${T.border}`, marginBottom:'4px' }}>
+        <span>SMILES</span><span>ART</span><span>BOLTZ</span><span>METHOD</span>
+      </div>
+      <div style={{ maxHeight:'220px', overflowY:'auto' }}>
+        {generated.map((r, i) => (
+          <div key={i} style={{ display:'grid', gridTemplateColumns:'1fr 80px 70px 70px',
+                                 gap:'6px', padding:'5px 0', borderBottom:`1px solid #0a0a15`,
+                                 fontSize:'10px', alignItems:'center' }}>
+            <span style={{ ...S.smiles, fontSize:'9px' }}>{r.smiles ?? '—'}</span>
+            <span style={{ color: r.art_score != null ? T.purple : T.textDim }}>
+              {r.art_score != null ? r.art_score.toFixed(3) : '—'}
+            </span>
+            <span style={{ color: r.boltz_score != null ? T.green : T.textDim }}>
+              {r.boltz_score != null ? r.boltz_score.toFixed(4) : '—'}
+            </span>
+            <span style={{ color: T.textDim, fontSize:'9px' }}>{(r.method ?? '').slice(0,10)}</span>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  )
+}
+
+/* ─── CSS ───────────────────────────────────────────────────── */
 const CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
   * { box-sizing: border-box; }
-  body { margin: 0; background: #0a0a0a; }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0,255,136,0.4); }
-    50%       { opacity: 0.6; box-shadow: 0 0 0 6px rgba(0,255,136,0); }
+  body { margin: 0; background: #050a05; font-family: 'Courier New', monospace; }
+  ::selection { background: #00ff4133; color: #00ff41; }
+  @keyframes textPulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.85; }
   }
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(4px); }
-    to   { opacity: 1; transform: translateY(0); }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0; }
+  }
+  @keyframes helix1 {
+    from { stroke-dashoffset: 0; }
+    to   { stroke-dashoffset: -100; }
+  }
+  @keyframes scanMove {
+    from { background-position: 0 0; }
+    to   { background-position: 0 4px; }
   }
   ::-webkit-scrollbar { width: 4px; }
-  ::-webkit-scrollbar-track { background: #111; }
-  ::-webkit-scrollbar-thumb { background: #1a2a1a; border-radius: 2px; }
+  ::-webkit-scrollbar-track { background: #050a05; }
+  ::-webkit-scrollbar-thumb { background: #00ff4133; border-radius: 0; }
+  ::-webkit-scrollbar-thumb:hover { background: #00ff4166; }
 `
 
 /* ─── App ───────────────────────────────────────────────────── */
 export default function App() {
-  const [pub,      setPub]      = useState(null)   // /stats
-  const [priv,     setPriv]     = useState(null)   // /private/stats (null if not localhost)
-  const [lastPoll, setLastPoll] = useState(null)
-  const [isLocal,  setIsLocal]  = useState(false)
+  const [pub,  setPub]  = useState(null)
+  const [priv, setPriv] = useState(null)
+  const [tick, setTick] = useState(null)
+  const [local, setLocal] = useState(false)
 
   useEffect(() => {
     async function poll() {
-      // Always fetch public stats
-      try {
-        const r = await fetch('/stats?' + Date.now())
-        if (r.ok) setPub(await r.json())
-      } catch { /* daemon not running yet */ }
-
-      // Try private stats — only works from localhost
+      try { const r = await fetch('/stats?' + Date.now()); if (r.ok) setPub(await r.json()) } catch {}
       try {
         const r = await fetch('/private/stats?' + Date.now())
-        if (r.ok) {
-          setPriv(await r.json())
-          setIsLocal(true)
-        } else {
-          setIsLocal(false)
-          setPriv(null)
-        }
-      } catch {
-        setIsLocal(false)
-        setPriv(null)
-      }
-
-      setLastPoll(new Date())
+        if (r.ok) { setPriv(await r.json()); setLocal(true) }
+        else       { setPriv(null); setLocal(false) }
+      } catch { setPriv(null); setLocal(false) }
+      setTick(new Date())
     }
     poll()
     const id = setInterval(poll, 5000)
     return () => clearInterval(id)
   }, [])
 
-  const alive   = pub?.alive             ?? false
+  const alive   = pub?.alive              ?? false
   const mols    = pub?.molecules_screened ?? 0
   const life    = pub?.life_earned        ?? 0
   const tgts    = pub?.targets_contributed ?? []
@@ -926,59 +980,86 @@ export default function App() {
   const scoring = pub?.scoring_history    ?? []
   const target  = pub?.current_target    ?? '—'
   const minerId = pub?.miner_id          ?? '—'
+  const lastUpd = pub?.last_updated      ?? null
 
   return (
     <>
       <style>{CSS}</style>
-      <div style={S.app}>
-        {/* Header */}
-        <header style={S.header}>
-          <div style={S.tagline}>✦ Your GPU could help cure cancer. Earn $LIFE tokens. ✦</div>
-          <div style={S.subtitle}>LIFE Compute — Decentralized Drug Discovery Network</div>
-          <div style={S.statusDot(alive)}>
-            <span style={{ ...S.pulseDot, background: alive ? T.accent : T.warn }} />
-            {alive ? 'Miner running' : 'Waiting for daemon…'}
-          </div>
-        </header>
+      <div style={S.wrap}>
+        <MatrixRain />
+        <div style={S.scanlines} />
+        <div style={S.content}>
 
-        <div style={S.grid}>
-          {/* ── Public panels ── */}
-          <div style={S.sectionLabel}>PUBLIC — MINER STATUS</div>
-          <MinerStatusPanel alive={alive} currentTarget={target} minerId={minerId} />
-          <MoleculesPanel   count={mols} />
-          <LifeEarnedPanel  earned={life} />
-          <TargetsPanel     targets={tgts} />
-
-          <div style={S.sectionLabel}>PUBLIC — PERFORMANCE &amp; NETWORK</div>
-          <ScoringHistoryPanel history={scoring} />
-          <NetworkPanel        network={network} />
-
-          {/* ── Private panels (localhost only) ── */}
-          {isLocal && (
-            <>
-              <div style={S.privateSectionLabel}>
-                🔒 PRIVATE — LOCAL DIAGNOSTICS (not shared with network)
+          {/* ── Header ── */}
+          <header style={S.header}>
+            <div style={S.headerInner}>
+              <DNAHelix />
+              <div style={S.tagline}>
+                ▓▒░ YOUR GPU IS FIGHTING CANCER ░▒▓
               </div>
-              <PulsePanel     pulse={priv?.pulse} />
-              <ArtPanel       art={priv?.art} />
-              <ScoutPanel     scout={priv?.scout} priv={priv} />
-              <GeneratedPanel generated={priv?.generated} />
-            </>
-          )}
-        </div>
+              <div style={S.subtitle}>
+                LIFE COMPUTE — DECENTRALIZED DRUG DISCOVERY NETWORK
+              </div>
+              <div style={{ fontSize: '10px', color: T.textDim, letterSpacing: '0.16em' }}>
+                POWERED BY BOLTZ2 MOLECULAR DOCKING · SOLANA BLOCKCHAIN · BITTENSOR SUBNET
+              </div>
+            </div>
+            <div style={S.statusBadge(alive)}>
+              <div style={S.statusDot(alive)} />
+              {alive ? 'SYS:ONLINE' : 'SYS:OFFLINE'}
+            </div>
+          </header>
 
-        {/* Footer */}
-        <footer style={S.footer}>
-          <span>LIFE Compute Miner v1.0.0</span>
-          <span>
-            {lastPoll
-              ? `Last updated: ${lastPoll.toLocaleTimeString()}`
-              : 'Connecting to daemon…'}
-          </span>
-          <span style={{ color: isLocal ? T.privateAccent : T.muted, fontSize: '11px' }}>
-            {isLocal ? '🔒 localhost — private panels visible' : '🌐 public view'}
-          </span>
-        </footer>
+          {/* ── Grid ── */}
+          <div style={S.grid}>
+
+            {/* Public */}
+            <div style={S.sectionLabel}>
+              <div style={S.sectionTick} />
+              PUBLIC // MINER TELEMETRY
+            </div>
+
+            <MinerStatusPanel alive={alive} currentTarget={target}
+                              minerId={minerId} lastUpdated={lastUpd} />
+            <MoleculesPanel   count={mols} />
+            <LifeEarnedPanel  earned={life} />
+            <TargetsPanel     targets={tgts} />
+            <CurrentMoleculePanel pub={pub} priv={priv} />
+
+            <div style={S.sectionLabel}>
+              <div style={S.sectionTick} />
+              PUBLIC // PERFORMANCE &amp; NETWORK
+            </div>
+
+            <ScoringHistoryPanel history={scoring} />
+            <NetworkPanel        network={network} />
+
+            {/* Private */}
+            {local && (
+              <>
+                <div style={{ ...S.sectionLabel, color: T.purple, textShadow: glow(T.purple, 2) }}>
+                  <div style={{ ...S.sectionTick, background: T.purple, boxShadow: glow(T.purple, 3) }} />
+                  🔒 PRIVATE // LOCAL DIAGNOSTICS — NOT BROADCAST TO NETWORK
+                </div>
+                <PulsePanel     pulse={priv?.pulse} />
+                <ArtPanel       art={priv?.art} />
+                <ScoutPanel     scout={priv?.scout} priv={priv} />
+                <GeneratedPanel generated={priv?.generated} />
+              </>
+            )}
+          </div>
+
+          {/* ── Footer ── */}
+          <footer style={S.footer}>
+            <span>LIFE-COMPUTE MINER v2.0.0 // BIOPUNK EDITION</span>
+            <span style={{ color: T.green, textShadow: glow(T.green, 2) }}>
+              {tick ? `LAST_SYNC: ${tick.toLocaleTimeString()}` : 'CONNECTING…'}
+            </span>
+            <span style={{ color: local ? T.purple : T.textDim }}>
+              {local ? '🔒 LOCALHOST — PRIVATE PANELS VISIBLE' : '🌐 PUBLIC VIEW'}
+            </span>
+          </footer>
+        </div>
       </div>
     </>
   )
