@@ -373,6 +373,8 @@ def main():
             log.warning(f"[ChEMBL] Could not start prefetch thread: {_ce}")
 
     stats = {
+        "alive": True,
+        "current_target": "",
         "molecules_screened": 0, "life_earned": 0.0,
         "targets_contributed": [], "transactions": [],
         "adaptive": {"available": _ADAPTIVE_AVAILABLE, "art_ready": False,
@@ -614,6 +616,8 @@ def main():
         targets_hit = list({t["target"] for t in txs})
 
         stats.update({
+            "alive": True,
+            "current_target": tid,
             "molecules_screened": molecules_done,
             "life_earned": life_earned,
             "targets_contributed": targets_hit,

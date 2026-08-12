@@ -2,21 +2,24 @@ import { useState, useEffect, useRef } from 'react'
 
 /* ─── Theme tokens ─────────────────────────────────────────── */
 const T = {
-  bg:         '#0a0a0a',
-  surface:    '#111111',
-  border:     '#1a2a1a',
-  accent:     '#00ff88',
-  accentDim:  '#00cc6a',
-  accentGlow: 'rgba(0,255,136,0.12)',
-  warn:       '#ff6b35',
-  muted:      '#4a5568',
-  text:       '#e2e8f0',
-  textDim:    '#718096',
-  purple:     '#a78bfa',
-  purpleGlow: 'rgba(167,139,250,0.15)',
-  gold:       '#ffe066',
-  blue:       '#60a5fa',
-  blueGlow:   'rgba(96,165,250,0.12)',
+  bg:          '#0a0a0a',
+  surface:     '#111111',
+  border:      '#1a2a1a',
+  accent:      '#00ff88',
+  accentDim:   '#00cc6a',
+  accentGlow:  'rgba(0,255,136,0.12)',
+  warn:        '#ff6b35',
+  muted:       '#4a5568',
+  text:        '#e2e8f0',
+  textDim:     '#718096',
+  purple:      '#a78bfa',
+  purpleGlow:  'rgba(167,139,250,0.15)',
+  gold:        '#ffe066',
+  blue:        '#60a5fa',
+  blueGlow:    'rgba(96,165,250,0.12)',
+  privateBg:   '#0d0a1a',
+  privateBorder: '#2a1a3a',
+  privateAccent: '#c084fc',
 }
 
 /* ─── Inline styles ────────────────────────────────────────── */
@@ -80,6 +83,19 @@ const S = {
     borderBottom:    `1px solid ${T.border}`,
     marginTop:       '8px',
   },
+  privateSectionLabel: {
+    gridColumn:      '1 / -1',
+    fontSize:        '11px',
+    letterSpacing:   '0.18em',
+    textTransform:   'uppercase',
+    color:           T.privateAccent,
+    paddingBottom:   '4px',
+    borderBottom:    `1px solid ${T.privateBorder}`,
+    marginTop:       '16px',
+    display:         'flex',
+    alignItems:      'center',
+    gap:             '10px',
+  },
   panel: {
     background:      T.surface,
     border:          `1px solid ${T.border}`,
@@ -88,6 +104,14 @@ const S = {
     position:        'relative',
     overflow:        'hidden',
     transition:      'border-color 0.3s',
+  },
+  privatePanel: {
+    background:      T.privateBg,
+    border:          `1px solid ${T.privateBorder}`,
+    borderRadius:    '12px',
+    padding:         '28px',
+    position:        'relative',
+    overflow:        'hidden',
   },
   panelGlow: {
     position:        'absolute',
@@ -113,6 +137,14 @@ const S = {
     height:          '2px',
     background:      `linear-gradient(90deg, transparent, ${T.blue}, transparent)`,
   },
+  panelGlowPrivate: {
+    position:        'absolute',
+    top:             0,
+    left:            0,
+    right:           0,
+    height:          '2px',
+    background:      `linear-gradient(90deg, transparent, ${T.privateAccent}, transparent)`,
+  },
   panelTitle: {
     fontSize:        '11px',
     color:           T.textDim,
@@ -122,6 +154,17 @@ const S = {
     display:         'flex',
     alignItems:      'center',
     gap:             '8px',
+  },
+  privateNote: {
+    fontSize:        '10px',
+    color:           T.privateAccent,
+    background:      '#1a0a2a',
+    border:          `1px solid ${T.privateBorder}`,
+    borderRadius:    '4px',
+    padding:         '4px 10px',
+    marginBottom:    '14px',
+    display:         'inline-block',
+    letterSpacing:   '0.06em',
   },
   bigNumber: {
     fontSize:        '52px',
@@ -214,7 +257,6 @@ const S = {
     marginRight:     '6px',
     animation:       'pulse 2s infinite',
   },
-  /* ── Adaptive panel micro-styles ── */
   kv: {
     display:         'flex',
     justifyContent:  'space-between',
@@ -272,6 +314,15 @@ const S = {
     fontSize:        '11px',
     alignItems:      'center',
   },
+  generatedRow: {
+    display:         'grid',
+    gridTemplateColumns: '1fr 80px 80px 60px',
+    gap:             '8px',
+    padding:         '6px 0',
+    borderBottom:    `1px solid #1a0a2a`,
+    fontSize:        '11px',
+    alignItems:      'center',
+  },
 }
 
 /* ─── Animated counter hook ────────────────────────────────── */
@@ -300,8 +351,9 @@ function useAnimatedNumber(target, duration = 800) {
   return display
 }
 
-/* ─── Panel icon map ───────────────────────────────────────── */
+/* ─── Icons ─────────────────────────────────────────────────── */
 const ICONS = {
+  status:    '⬡',
   molecules: '🔬',
   life:      '✦',
   targets:   '🧬',
@@ -310,10 +362,62 @@ const ICONS = {
   art:       '🧠',
   scout:     '🎯',
   scoring:   '📊',
+  generated: '🔮',
 }
 
-/* ─── EXISTING PANELS (unchanged) ─────────────────────────── */
+/* ─── Family colors ─────────────────────────────────────────── */
+const FAMILY_COLORS = {
+  kinase:           T.purple,
+  cytokine:         '#f472b6',
+  protease:         '#fb923c',
+  nuclear_receptor: T.gold,
+  general:          T.blue,
+}
 
+/* ══════════════════════════════════════════════════════════════
+   PUBLIC PANELS
+   ══════════════════════════════════════════════════════════════ */
+
+/* ─── Miner Status panel ────────────────────────────────────── */
+function MinerStatusPanel({ alive, currentTarget, minerId }) {
+  return (
+    <div style={S.panel}>
+      <div style={S.panelGlow} />
+      <div style={S.panelTitle}>
+        <span>{ICONS.status}</span> Miner Status
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '20px' }}>
+        <div style={{
+          fontSize:     '28px',
+          fontWeight:   700,
+          color:        alive ? T.accent : T.warn,
+          textShadow:   alive ? `0 0 24px ${T.accent}` : `0 0 24px ${T.warn}`,
+          letterSpacing: '0.05em',
+        }}>
+          {alive ? '● ONLINE' : '○ OFFLINE'}
+        </div>
+      </div>
+
+      <div style={S.kv}>
+        <span style={S.globalLabel}>Current Target</span>
+        <span style={{ color: T.accentDim, fontWeight: 600 }}>{currentTarget || '—'}</span>
+      </div>
+      <div style={{ ...S.kvLast, flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+        <span style={S.globalLabel}>Miner UID</span>
+        <span style={{
+          color:        T.textDim,
+          fontSize:     '11px',
+          wordBreak:    'break-all',
+          lineHeight:   1.5,
+          marginTop:    '4px',
+        }}>{minerId || '—'}</span>
+      </div>
+    </div>
+  )
+}
+
+/* ─── Molecules panel ───────────────────────────────────────── */
 function MoleculesPanel({ count }) {
   const animated = useAnimatedNumber(count)
   return (
@@ -328,6 +432,7 @@ function MoleculesPanel({ count }) {
   )
 }
 
+/* ─── $LIFE Earned panel ────────────────────────────────────── */
 function LifeEarnedPanel({ earned }) {
   const animated = useAnimatedNumber(Math.floor(earned))
   return (
@@ -345,6 +450,7 @@ function LifeEarnedPanel({ earned }) {
   )
 }
 
+/* ─── Targets Contributed panel ─────────────────────────────── */
 function TargetsPanel({ targets }) {
   return (
     <div style={S.panel}>
@@ -371,13 +477,71 @@ function TargetsPanel({ targets }) {
   )
 }
 
-function NetworkPanel({ global: g, recent }) {
+/* ─── Scoring History panel (public — best score per epoch) ── */
+function ScoringHistoryPanel({ history }) {
+  if (!history || history.length === 0) return (
+    <div style={S.panel}>
+      <div style={S.panelGlow} />
+      <div style={S.panelTitle}><span>{ICONS.scoring}</span> Scoring History</div>
+      <div style={S.label}>No scores yet — accumulating Boltz2 evaluations…</div>
+    </div>
+  )
+
+  const scores  = history.filter(r => r.best_score !== null).map(r => r.best_score)
+  const best    = scores.length ? Math.max(...scores) : null
+  const avg     = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null
+
   return (
     <div style={S.panel}>
       <div style={S.panelGlow} />
       <div style={S.panelTitle}>
-        <span>{ICONS.network}</span> Global Network Stats
-        <span style={{ marginLeft: 'auto', fontSize: '10px', color: T.textDim }}>mock data</span>
+        <span>{ICONS.scoring}</span> Scoring History
+        <span style={{ marginLeft: 'auto', color: T.accent }}>{history.length} epochs</span>
+      </div>
+
+      <div style={{ display: 'flex', gap: '24px', marginBottom: '16px' }}>
+        <div>
+          <div style={{ fontSize: '28px', fontWeight: 700, color: T.accent, lineHeight: 1 }}>
+            {best !== null ? best.toFixed(4) : '—'}
+          </div>
+          <div style={S.label}>best score</div>
+        </div>
+        <div>
+          <div style={{ fontSize: '28px', fontWeight: 700, color: T.accentDim, lineHeight: 1 }}>
+            {avg !== null ? avg.toFixed(4) : '—'}
+          </div>
+          <div style={S.label}>epoch avg</div>
+        </div>
+      </div>
+
+      <div style={{ ...S.scoreRow, color: T.muted, borderBottom: `1px solid ${T.border}`,
+                    paddingBottom: '6px', marginBottom: '2px' }}>
+        <span>TIME</span><span>Best Score</span><span>Target</span><span></span>
+      </div>
+
+      <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+        {history.map((r, i) => (
+          <div key={i} style={S.scoreRow}>
+            <span style={{ color: T.textDim }}>{r.ts_iso ? r.ts_iso.slice(11, 19) : '—'}</span>
+            <span style={{ color: r.best_score !== null ? T.accent : T.muted, fontWeight: 600 }}>
+              {r.best_score !== null ? r.best_score.toFixed(4) : '—'}
+            </span>
+            <span style={{ color: T.accentDim }}>{r.target_id || '?'}</span>
+            <span />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ─── Global Network panel ──────────────────────────────────── */
+function NetworkPanel({ global: g }) {
+  return (
+    <div style={S.panel}>
+      <div style={S.panelGlow} />
+      <div style={S.panelTitle}>
+        <span>{ICONS.network}</span> Global Network
       </div>
 
       <div style={S.globalRow}>
@@ -386,69 +550,63 @@ function NetworkPanel({ global: g, recent }) {
       </div>
       <div style={S.globalRow}>
         <span style={S.globalLabel}>Global Molecules Screened</span>
-        <span style={S.globalValue}>{(g?.total_molecules_screened ?? 0).toLocaleString()}</span>
+        <span style={S.globalValue}>{(g?.molecules_global ?? g?.total_molecules_screened ?? 0).toLocaleString()}</span>
       </div>
       <div style={{ ...S.globalRow, borderBottom: 'none' }}>
         <span style={S.globalLabel}>Targets Solved (candidates found)</span>
         <span style={S.globalValue}>{g?.targets_solved ?? 0}</span>
       </div>
-
-      {recent && recent.length > 0 && (
-        <>
-          <div style={{ ...S.panelTitle, marginTop: '20px' }}>Recent Submissions</div>
-          <div style={S.submissionList}>
-            {[...recent].reverse().map((s, i) => (
-              <div key={i} style={S.submissionItem}>
-                <span style={{ color: T.accentDim }}>{s.target}</span>
-                <span>{s.binding_score?.toFixed(3)} kcal/mol</span>
-                <span style={{ color: T.muted }}>{s.ts?.slice(11, 19)}</span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
     </div>
   )
 }
 
-/* ─── NEW: LIFE PULSE panel ─────────────────────────────────── */
-const FAMILY_COLORS = {
-  kinase:           T.purple,
-  cytokine:         '#f472b6',
-  protease:         '#fb923c',
-  nuclear_receptor: T.gold,
-  general:          T.blue,
+/* ══════════════════════════════════════════════════════════════
+   PRIVATE PANELS  (only shown when isLocalhost = true)
+   ══════════════════════════════════════════════════════════════ */
+
+function PrivateNote() {
+  return (
+    <div style={S.privateNote}>
+      🔒 Local diagnostics — not shared with network
+    </div>
+  )
 }
 
+/* ─── LIFE PULSE panel ───────────────────────────────────────── */
 function PulsePanel({ pulse }) {
   if (!pulse) return null
-  const { total_evaluated = 0, top_proxy_score = 0, family_counts = {}, recent = [] } = pulse
+  const { sobol_index = 0, total_evaluated = 0, top_proxy_score = 0, family_counts = {}, recent = [] } = pulse
   return (
-    <div style={{ ...S.panel, border: `1px solid ${T.purple}33` }}>
-      <div style={S.panelGlowPurple} />
+    <div style={S.privatePanel}>
+      <div style={S.panelGlowPrivate} />
       <div style={S.panelTitle}>
         <span>{ICONS.pulse}</span> LIFE PULSE
         <span style={{ marginLeft: 'auto', ...S.pill(T.purple) }}>SOBOL</span>
       </div>
+      <PrivateNote />
 
       <div style={{ display: 'flex', gap: '32px', marginBottom: '16px' }}>
         <div>
-          <div style={{ fontSize: '36px', fontWeight: 700, color: T.purple, lineHeight: 1,
-                        textShadow: `0 0 24px ${T.purpleGlow}` }}>
+          <div style={{ fontSize: '28px', fontWeight: 700, color: T.purple, lineHeight: 1 }}>
+            {sobol_index.toLocaleString()}
+          </div>
+          <div style={S.label}>exploration index</div>
+        </div>
+        <div>
+          <div style={{ fontSize: '28px', fontWeight: 700, color: T.accentDim, lineHeight: 1 }}>
             {total_evaluated.toLocaleString()}
           </div>
           <div style={S.label}>molecules swept</div>
         </div>
         <div>
-          <div style={{ fontSize: '36px', fontWeight: 700, color: T.accentDim, lineHeight: 1 }}>
+          <div style={{ fontSize: '28px', fontWeight: 700, color: T.accentDim, lineHeight: 1 }}>
             {top_proxy_score.toFixed(3)}
           </div>
           <div style={S.label}>best proxy score</div>
         </div>
       </div>
 
-      {/* Family distribution pills */}
-      <div style={{ ...S.panelTitle, marginBottom: '8px' }}>Family Distribution</div>
+      <div style={{ ...S.panelTitle, marginBottom: '8px' }}>Sobol State — Family Distribution</div>
       <div style={S.familyBar}>
         {Object.entries(family_counts).map(([fam, cnt]) => (
           <span key={fam} style={S.pill(FAMILY_COLORS[fam] || T.textDim)}>
@@ -459,14 +617,13 @@ function PulsePanel({ pulse }) {
           <span style={{ color: T.textDim, fontSize: '12px' }}>Sweep starting…</span>}
       </div>
 
-      {/* Recent molecules */}
       {recent.length > 0 && (
         <>
           <div style={{ ...S.panelTitle, marginTop: '16px', marginBottom: '8px' }}>Recent Molecules</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '140px', overflowY: 'auto' }}>
             {recent.map((r, i) => (
               <div key={i} style={{ display: 'flex', gap: '8px', alignItems: 'center',
-                                    padding: '4px 0', borderBottom: '1px solid #161616', fontSize: '11px' }}>
+                                    padding: '4px 0', borderBottom: '1px solid #1a0a2a', fontSize: '11px' }}>
                 <span style={S.pill(FAMILY_COLORS[r.family] || T.muted)}>{r.family?.slice(0, 4)}</span>
                 <span style={{ color: T.textDim, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis',
                                whiteSpace: 'nowrap' }}>{r.smiles}</span>
@@ -480,7 +637,7 @@ function PulsePanel({ pulse }) {
   )
 }
 
-/* ─── NEW: LIFE ART panel ───────────────────────────────────── */
+/* ─── LIFE ART panel ─────────────────────────────────────────── */
 function ArtPanel({ art }) {
   if (!art) return null
   const {
@@ -492,17 +649,23 @@ function ArtPanel({ art }) {
     retrain_progress = 0,
     next_retrain_in = 50,
     n_features = 525,
+    feature_importances = {},
   } = art
 
+  const topFeatures = Object.entries(feature_importances)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+
   return (
-    <div style={{ ...S.panel, border: `1px solid ${T.blue}33` }}>
-      <div style={S.panelGlowBlue} />
+    <div style={S.privatePanel}>
+      <div style={S.panelGlowPrivate} />
       <div style={S.panelTitle}>
         <span>{ICONS.art}</span> LIFE ART
         <span style={{ marginLeft: 'auto', ...S.pill(ready ? T.accent : T.warn) }}>
           {ready ? 'MODEL LIVE' : 'TRAINING'}
         </span>
       </div>
+      <PrivateNote />
 
       <div style={S.kv}>
         <span style={S.globalLabel}>Model Ready</span>
@@ -540,6 +703,18 @@ function ArtPanel({ art }) {
         </div>
       </div>
 
+      {topFeatures.length > 0 && (
+        <div style={{ marginTop: '14px' }}>
+          <div style={{ ...S.panelTitle, marginBottom: '6px' }}>Top Feature Importances</div>
+          {topFeatures.map(([feat, imp]) => (
+            <div key={feat} style={{ ...S.kv, borderBottom: '1px solid #1a0a2a' }}>
+              <span style={{ color: T.textDim, fontSize: '11px' }}>{feat}</span>
+              <span style={{ color: T.privateAccent, fontSize: '11px' }}>{imp.toFixed(3)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {!ready && (
         <div style={{ marginTop: '14px', padding: '10px 14px', background: '#0d0d1a',
                       borderRadius: '8px', border: `1px solid ${T.blue}22`, fontSize: '12px',
@@ -551,10 +726,10 @@ function ArtPanel({ art }) {
   )
 }
 
-/* ─── NEW: LIFE SCOUT panel ─────────────────────────────────── */
+/* ─── LIFE SCOUT panel ───────────────────────────────────────── */
 const PHASE_COLORS = { explore: T.blue, exploit: T.accent, refine: T.purple }
 
-function ScoutPanel({ scout, adaptive }) {
+function ScoutPanel({ scout, priv }) {
   if (!scout) return null
   const {
     last_family = '—',
@@ -563,15 +738,14 @@ function ScoutPanel({ scout, adaptive }) {
     n_passed_filter = 0,
     best_score  = null,
     target_id   = '—',
-    ts          = null,
   } = scout
 
   const phaseColor = PHASE_COLORS[last_phase] || T.textDim
-  const artReady   = adaptive?.art?.ready ?? false
+  const artReady   = priv?.art?.ready ?? false
 
   return (
-    <div style={{ ...S.panel, border: `1px solid ${T.accent}22` }}>
-      <div style={S.panelGlow} />
+    <div style={S.privatePanel}>
+      <div style={S.panelGlowPrivate} />
       <div style={S.panelTitle}>
         <span>{ICONS.scout}</span> LIFE SCOUT
         {last_phase !== '—' && (
@@ -580,9 +754,10 @@ function ScoutPanel({ scout, adaptive }) {
           </span>
         )}
       </div>
+      <PrivateNote />
 
       <div style={S.kv}>
-        <span style={S.globalLabel}>Protein Family</span>
+        <span style={S.globalLabel}>Protein Family Routing</span>
         <span style={{ color: FAMILY_COLORS[last_family] || T.text, fontWeight: 600 }}>
           {last_family.replace('_', ' ')}
         </span>
@@ -592,7 +767,7 @@ function ScoutPanel({ scout, adaptive }) {
         <span style={{ color: T.accentDim }}>{target_id}</span>
       </div>
       <div style={S.kv}>
-        <span style={S.globalLabel}>Passed Family Filter</span>
+        <span style={S.globalLabel}>Library Choice (passed filter)</span>
         <span style={{ color: T.text }}>{n_passed_filter}</span>
       </div>
       <div style={S.kv}>
@@ -606,7 +781,7 @@ function ScoutPanel({ scout, adaptive }) {
         </span>
       </div>
       <div style={{ ...S.kvLast, gap: '8px', flexWrap: 'wrap' }}>
-        <span style={S.globalLabel}>Epoch Phase</span>
+        <span style={S.globalLabel}>Routing Decision</span>
         <div style={{ display: 'flex', gap: '6px', marginLeft: 'auto' }}>
           {['explore', 'exploit', 'refine'].map(p => (
             <span key={p} style={{
@@ -633,62 +808,43 @@ function ScoutPanel({ scout, adaptive }) {
   )
 }
 
-/* ─── NEW: Scoring History panel ────────────────────────────── */
-function ScoringHistoryPanel({ history }) {
-  if (!history || history.length === 0) return (
-    <div style={S.panel}>
-      <div style={S.panelGlow} />
-      <div style={S.panelTitle}><span>{ICONS.scoring}</span> Boltz2 Scoring History</div>
-      <div style={S.label}>No Boltz2 scores yet — miner is accumulating data…</div>
+/* ─── Generated Molecules panel ─────────────────────────────── */
+function GeneratedPanel({ generated }) {
+  if (!generated || generated.length === 0) return (
+    <div style={S.privatePanel}>
+      <div style={S.panelGlowPrivate} />
+      <div style={S.panelTitle}><span>{ICONS.generated}</span> Generated Molecules</div>
+      <PrivateNote />
+      <div style={S.label}>No generated molecules yet — generative phase starting…</div>
     </div>
   )
 
-  const scores = history.filter(r => r.boltz_score !== null).map(r => r.boltz_score)
-  const best   = scores.length ? Math.max(...scores) : null
-  const avg    = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null
-
   return (
-    <div style={S.panel}>
-      <div style={S.panelGlow} />
+    <div style={S.privatePanel}>
+      <div style={S.panelGlowPrivate} />
       <div style={S.panelTitle}>
-        <span>{ICONS.scoring}</span> Boltz2 Scoring History
-        <span style={{ marginLeft: 'auto', color: T.accent }}>{history.length} records</span>
+        <span>{ICONS.generated}</span> Generated Molecules
+        <span style={{ marginLeft: 'auto', color: T.privateAccent }}>{generated.length} recent</span>
       </div>
+      <PrivateNote />
 
-      {/* Summary row */}
-      <div style={{ display: 'flex', gap: '24px', marginBottom: '16px' }}>
-        <div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: T.accent, lineHeight: 1 }}>
-            {best !== null ? best.toFixed(4) : '—'}
-          </div>
-          <div style={S.label}>best boltz score</div>
-        </div>
-        <div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: T.accentDim, lineHeight: 1 }}>
-            {avg !== null ? avg.toFixed(4) : '—'}
-          </div>
-          <div style={S.label}>session avg</div>
-        </div>
-      </div>
-
-      {/* Column header */}
-      <div style={{ ...S.scoreRow, color: T.muted, borderBottom: `1px solid ${T.border}`,
+      <div style={{ ...S.generatedRow, color: T.muted, borderBottom: `1px solid ${T.privateBorder}`,
                     paddingBottom: '6px', marginBottom: '2px' }}>
-        <span>SMILES</span><span>Score</span><span>Target</span><span>Time</span>
+        <span>SMILES</span><span>ART Score</span><span>Boltz</span><span>Method</span>
       </div>
 
-      {/* Rows */}
-      <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-        {history.map((r, i) => (
-          <div key={i} style={S.scoreRow}>
+      <div style={{ maxHeight: '240px', overflowY: 'auto' }}>
+        {generated.map((r, i) => (
+          <div key={i} style={S.generatedRow}>
             <span style={{ color: T.textDim, overflow: 'hidden', textOverflow: 'ellipsis',
                            whiteSpace: 'nowrap' }}>{r.smiles || '—'}</span>
-            <span style={{ color: r.boltz_score !== null ? T.accent : T.muted,
-                           fontWeight: 600 }}>
+            <span style={{ color: r.art_score !== null ? T.privateAccent : T.muted, fontWeight: 600 }}>
+              {r.art_score !== null ? r.art_score.toFixed(3) : '—'}
+            </span>
+            <span style={{ color: r.boltz_score !== null ? T.accent : T.muted }}>
               {r.boltz_score !== null ? r.boltz_score.toFixed(4) : '—'}
             </span>
-            <span style={{ color: T.accentDim }}>{r.target_id || '?'}</span>
-            <span style={{ color: T.muted }}>{r.ts ? r.ts.slice(11, 19) : '—'}</span>
+            <span style={{ color: T.textDim, fontSize: '10px' }}>{(r.method || '').slice(0, 12)}</span>
           </div>
         ))}
       </div>
@@ -696,7 +852,7 @@ function ScoringHistoryPanel({ history }) {
   )
 }
 
-/* ─── Global CSS ───────────────────────────────────────────── */
+/* ─── Global CSS ────────────────────────────────────────────── */
 const CSS = `
   * { box-sizing: border-box; }
   body { margin: 0; background: #0a0a0a; }
@@ -713,35 +869,51 @@ const CSS = `
   ::-webkit-scrollbar-thumb { background: #1a2a1a; border-radius: 2px; }
 `
 
-/* ─── App ──────────────────────────────────────────────────── */
+/* ─── App ───────────────────────────────────────────────────── */
 export default function App() {
-  const [stats,    setStats]    = useState(null)
-  const [adaptive, setAdaptive] = useState(null)
+  const [pub,      setPub]      = useState(null)   // /stats
+  const [priv,     setPriv]     = useState(null)   // /private/stats (null if not localhost)
   const [lastPoll, setLastPoll] = useState(null)
+  const [isLocal,  setIsLocal]  = useState(false)
 
   useEffect(() => {
     async function poll() {
+      // Always fetch public stats
       try {
-        const [sRes, aRes] = await Promise.all([
-          fetch('/stats.json?'    + Date.now()),
-          fetch('/adaptive.json?' + Date.now()),
-        ])
-        if (sRes.ok) setStats(await sRes.json())
-        if (aRes.ok) setAdaptive(await aRes.json())
-        setLastPoll(new Date())
+        const r = await fetch('/stats?' + Date.now())
+        if (r.ok) setPub(await r.json())
       } catch { /* daemon not running yet */ }
+
+      // Try private stats — only works from localhost
+      try {
+        const r = await fetch('/private/stats?' + Date.now())
+        if (r.ok) {
+          setPriv(await r.json())
+          setIsLocal(true)
+        } else {
+          setIsLocal(false)
+          setPriv(null)
+        }
+      } catch {
+        setIsLocal(false)
+        setPriv(null)
+      }
+
+      setLastPoll(new Date())
     }
     poll()
     const id = setInterval(poll, 5000)
     return () => clearInterval(id)
   }, [])
 
-  const alive  = stats?.alive             ?? false
-  const mols   = stats?.molecules_screened ?? 0
-  const life   = stats?.life_earned        ?? 0
-  const tgts   = stats?.targets_contributed ?? []
-  const glob   = stats?.global_mock        ?? stats?.global ?? {}
-  const recent = stats?.recent_submissions ?? []
+  const alive   = pub?.alive             ?? false
+  const mols    = pub?.molecules_screened ?? 0
+  const life    = pub?.life_earned        ?? 0
+  const tgts    = pub?.targets_contributed ?? []
+  const glob    = pub?.global             ?? {}
+  const scoring = pub?.scoring_history    ?? []
+  const target  = pub?.current_target    ?? '—'
+  const minerId = pub?.miner_id          ?? '—'
 
   return (
     <>
@@ -758,19 +930,29 @@ export default function App() {
         </header>
 
         <div style={S.grid}>
-          {/* ── Existing panels ── */}
-          <div style={S.sectionLabel}>MINER STATUS</div>
-          <MoleculesPanel count={mols} />
-          <LifeEarnedPanel earned={life} />
-          <TargetsPanel targets={tgts} />
-          <NetworkPanel global={glob} recent={recent} />
+          {/* ── Public panels ── */}
+          <div style={S.sectionLabel}>PUBLIC — MINER STATUS</div>
+          <MinerStatusPanel alive={alive} currentTarget={target} minerId={minerId} />
+          <MoleculesPanel   count={mols} />
+          <LifeEarnedPanel  earned={life} />
+          <TargetsPanel     targets={tgts} />
 
-          {/* ── Adaptive AI panels ── */}
-          <div style={S.sectionLabel}>ADAPTIVE AI — LIFE PULSE · ART · SCOUT</div>
-          <PulsePanel        pulse={adaptive?.pulse} />
-          <ArtPanel          art={adaptive?.art} adaptive={adaptive} />
-          <ScoutPanel        scout={adaptive?.scout} adaptive={adaptive} />
-          <ScoringHistoryPanel history={adaptive?.scoring_history} />
+          <div style={S.sectionLabel}>PUBLIC — PERFORMANCE &amp; NETWORK</div>
+          <ScoringHistoryPanel history={scoring} />
+          <NetworkPanel        global={glob} />
+
+          {/* ── Private panels (localhost only) ── */}
+          {isLocal && (
+            <>
+              <div style={S.privateSectionLabel}>
+                🔒 PRIVATE — LOCAL DIAGNOSTICS (not shared with network)
+              </div>
+              <PulsePanel     pulse={priv?.pulse} />
+              <ArtPanel       art={priv?.art} />
+              <ScoutPanel     scout={priv?.scout} priv={priv} />
+              <GeneratedPanel generated={priv?.generated} />
+            </>
+          )}
         </div>
 
         {/* Footer */}
@@ -781,7 +963,9 @@ export default function App() {
               ? `Last updated: ${lastPoll.toLocaleTimeString()}`
               : 'Connecting to daemon…'}
           </span>
-          <span>Program: 3dYbT2…xYiC</span>
+          <span style={{ color: isLocal ? T.privateAccent : T.muted, fontSize: '11px' }}>
+            {isLocal ? '🔒 localhost — private panels visible' : '🌐 public view'}
+          </span>
         </footer>
       </div>
     </>
