@@ -73,18 +73,21 @@ def _cache_path(uniprot_id: str) -> Path:
 
 def _chembl_id_for(uniprot_id: str) -> Optional[str]:
     """
-    Resolve UniProt accession → ChEMBL target_chembl_id via the targets endpoint.
-    Returns the first single-protein target that matches, or None.
+    Resolve UniProt accession → ChEMBL target_chembl_id.
+    Returns the first SINGLE PROTEIN target matching the accession, or None.
     """
-    url = (f"{CHEMBL_API}/target.json?"
-           f"target_components__accession={uniprot_id}&target_type=SINGLE PROTEIN")
+    url = f"{CHEMBL_API}/target.json?target_components__accession={uniprot_id}"
     data = _get_json(url)
     if not data:
         return None
+    # Prefer SINGLE PROTEIN targets; fall back to first result
     targets = data.get("targets", [])
-    if not targets:
-        return None
-    return targets[0].get("target_chembl_id")
+    for t in targets:
+        if t.get("target_type") == "SINGLE PROTEIN":
+            return t["target_chembl_id"]
+    if targets:
+        return targets[0]["target_chembl_id"]
+    return None
 
 
 def _smiles_valid(smiles: str) -> bool:
