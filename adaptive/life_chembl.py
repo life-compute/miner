@@ -76,7 +76,7 @@ def _chembl_id_for(uniprot_id: str) -> Optional[str]:
     Resolve UniProt accession → ChEMBL target_chembl_id.
     Returns the first SINGLE PROTEIN target matching the accession, or None.
     """
-    url = f"{CHEMBL_API}/target.json?target_components__accession={uniprot_id}"
+    url = f"{CHEMBL_API}/target?target_components__accession={uniprot_id}&format=json"
     data = _get_json(url)
     if not data:
         return None
@@ -143,11 +143,12 @@ def download_chembl_actives(uniprot_id: str) -> list:
 
     while len(records) < MAX_ACTIVES:
         url = (
-            f"{CHEMBL_API}/activity.json?"
+            f"{CHEMBL_API}/activity?"
             f"target_chembl_id={chembl_id}"
             f"&pchembl_value__gte={MIN_PCHEMBL}"
             f"&standard_type__in=IC50,Ki,Kd,EC50"
             f"&assay_type=B"          # binding assays only
+            f"&format=json"
             f"&limit={PAGE_SIZE}&offset={offset}"
         )
         data = _get_json(url)
