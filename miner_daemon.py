@@ -629,15 +629,16 @@ def main():
         affinity    = _boltz_score_to_affinity(boltz_score)
 
         # Record reference compound score so we can use a relative threshold.
-        # If ref compound scores X, effective threshold = X - 1.0 kcal/mol.
+        # If ref compound scores X, effective threshold = X + 0.5 kcal/mol.
+        # DEVNET TESTING THRESHOLD — tighten before mainnet.
         if is_ref and affinity is not None:
             ref_scores[tid] = affinity
             log.info(
                 f"  [REF-SCORE] {tid} reference affinity: {affinity:.3f} kcal/mol  "
-                f"→ effective threshold this epoch: {affinity - 1.0:.3f} kcal/mol"
+                f"→ effective threshold this epoch: {affinity + 0.5:.3f} kcal/mol"
             )
 
-        eff_thresh = ref_scores[tid] - 1.0 if tid in ref_scores else thresh
+        eff_thresh = ref_scores[tid] + 0.5 if tid in ref_scores else thresh  # DEVNET TESTING THRESHOLD — tighten before mainnet
         hit        = affinity is not None and affinity <= eff_thresh
         score_str   = f"{affinity:.3f} kcal/mol" if affinity is not None else "None (scoring failed)"
 
