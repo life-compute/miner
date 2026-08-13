@@ -75,6 +75,27 @@ NOVA_VENV = NOVA_DIR / ".venv" / "bin" / "python"
 MSA_DIR   = Path("/mnt/minos-drive/life-compute-miner/data/msa_files")
 BOLTZ_SEED = 68   # Boltz2 random seed — included in submission so validator uses same seed
 
+# ── A/B test flag — flip False to bypass ART/SCOUT/PULSE for one epoch ────────
+# Set ADAPTIVE_ENABLED=False → pure random ZINC15 sampling (1.7M fragments).
+# Compare score distribution vs adaptive stack to quantify whether it helps.
+# Ref compound screening is always active regardless of this flag.
+# Flip back to True to restore adaptive behaviour.
+ADAPTIVE_ENABLED = False
+
+ZINC15_FRAGMENTS = Path(__file__).parent / "data" / "zinc15_fragments.smi"
+_zinc_cache: list[str] = []
+
+def _sample_zinc15() -> str:
+    """Random SMILES from ZINC15 fragment library (~1.7M molecules)."""
+    global _zinc_cache
+    if not _zinc_cache:
+        if ZINC15_FRAGMENTS.exists():
+            with ZINC15_FRAGMENTS.open() as f:
+                _zinc_cache = [ln.split()[0] for ln in f if ln.strip()]
+        if not _zinc_cache:
+            return random.choice(SCAFFOLDS)   # hard fallback if file missing
+    return random.choice(_zinc_cache)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
@@ -573,7 +594,7 @@ def main():
             epoch_screened.add(ref_smi)
             log.info(f"[REF] Screening reference compound for {tid}: {mol[:50]}")
 
-        elif _ADAPTIVE_AVAILABLE:
+        elif _ADAPTIVE_AVAILABLE and ADAPTIVE_ENABLED:
             # Adaptive stack: get focused, ART-ranked, diversity-filtered candidates
             try:
                 family = detect_protein_family(uid, target.get("protein_sequence", ""))
@@ -629,10 +650,9 @@ def main():
                 is_ref = False
 
         else:
-            # Fallback: original random scaffold sampling
-            mol, is_ref = sample_molecule(tid, ref_compounds, epoch_screened)
-            if is_ref:
-                epoch_screened.add(mol)
+            # ADAPTIVE_ENABLED=False (A/B test) or rdkit unavailable: pure ZINC15 random
+            mol    = _sample_zinc15()
+            is_ref = False
 
         log.info(
             f"Target: {tid} ({uid}) | tier {target.get('difficulty_tier','?')} "
