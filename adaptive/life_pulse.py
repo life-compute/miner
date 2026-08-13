@@ -680,7 +680,7 @@ def run_sweep(
                          max_configs with EliteMutator molecules.
     use_mutants        : Whether to run EliteMutator after the Sobol phase.
     """
-    state    = PulseState.load()
+    state    = PulseState.load(STATE_JSON)
     tfilter  = TanimotoFilter(threshold=tanimoto_threshold)
     sizer    = AdaptiveBatchSizer(initial_size=max_configs)
     reporter = ScoreReporter(report_every=max(10, max_configs // 10))
@@ -748,7 +748,7 @@ def run_sweep(
         state.total_evaluated += 1
         state.update_elite(row)
         reporter.record(row)
-        state.save()
+        state.save(STATE_JSON)
 
         idx       += 1
         evaluated += 1
@@ -772,7 +772,7 @@ def run_sweep(
             state.update_elite(row)
             reporter.record(row)
             written += 1
-        state.save()
+        state.save(STATE_JSON)
         if verbose and written:
             print(f"[PULSE] +{written} mutant molecules from elite pool")
 
