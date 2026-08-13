@@ -3,21 +3,39 @@
  *
  * Endpoints
  * ─────────
- *  GET /stats          Public stats (anyone) — miner status, molecules, $LIFE, targets, scoring history
- *  GET /private/stats  Private diagnostics (localhost only) — PULSE, ART, SCOUT, generated molecules
- *  GET /stats.json     Legacy alias for /stats (kept for backward compat)
- *  GET /adaptive.json  Legacy alias for private stats (kept for backward compat, localhost-gated)
- *  GET /*              Static files from dist/
+ *  GET  /stats          Public stats (anyone) — miner status, molecules, $LIFE, targets, scoring history
+ *  GET  /private/stats  Private diagnostics (localhost only) — PULSE, ART, SCOUT, generated molecules
+ *  GET  /stats.json     Legacy alias for /stats (kept for backward compat)
+ *  GET  /adaptive.json  Legacy alias for private stats (kept for backward compat, localhost-gated)
+ *  GET  /agent/status   Public: whether ANTHROPIC_API_KEY is configured
+ *  POST /agent/chat     AI chat proxy → Anthropic API (requires ANTHROPIC_API_KEY in .env)
+ *  GET  /*              Static files from dist/
  */
-const http = require('http');
-const fs   = require('fs');
-const path = require('path');
+const http  = require('http');
+const https = require('https');
+const fs    = require('fs');
+const path  = require('path');
 
 const PORT    = parseInt(process.env.DASHBOARD_PORT || '3001');
 const DIST    = path.join(__dirname, 'dist');
 const ROOT    = path.join(__dirname, '..');
 const STATS   = path.join(ROOT, 'stats.json');
 const OUT     = path.join(ROOT, 'output');
+
+/* ── .env fallback loader (PM2 env_file handles prod; this covers direct runs) */
+(function loadDotEnv() {
+  try {
+    const envPath = path.join(ROOT, '.env');
+    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+    for (const line of lines) {
+      const eq = line.indexOf('=');
+      if (eq < 0 || line.trimStart().startsWith('#')) continue;
+      const k = line.slice(0, eq).trim();
+      const v = line.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
+      if (k && !process.env[k]) process.env[k] = v;
+    }
+  } catch { /* .env absent — fine */ }
+})();
 
 const MIME = {
   '.html': 'text/html',
@@ -264,10 +282,111 @@ function buildAdaptive() {
   };
 }
 
+/* ── LIFE AGENT — Anthropic API proxy ───────────────────────────── */
+
+/** Read full POST body as parsed JSON. */
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try { resolve(JSON.parse(body)); }
+      catch (e) { reject(new Error('Invalid JSON body')); }
+    });
+    req.on('error', reject);
+  });
+}
+
+/** Call Anthropic Messages API; return assistant text. */
+function callAnthropic(apiKey, system, messages) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4096,
+      system,
+      messages,
+    });
+    const options = {
+      hostname: 'api.anthropic.com',
+      path: '/v1/messages',
+      method: 'POST',
+      headers: {
+        'x-api-key':         apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type':      'application/json',
+        'content-length':    Buffer.byteLength(payload),
+      },
+    };
+    const req = https.request(options, res => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.error) {
+            reject(new Error(parsed.error.message || `Anthropic API error (${res.statusCode})`));
+          } else if (parsed.content && parsed.content[0]) {
+            resolve(parsed.content[0].text);
+          } else {
+            reject(new Error(`Unexpected Anthropic response: ${data.slice(0, 200)}`));
+          }
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+/** Build LIFE AGENT system prompt injecting live miner stats. */
+function buildAgentSystemPrompt() {
+  const stats = buildPublicStats();
+  const statsStr = JSON.stringify({
+    alive:               stats.alive,
+    current_target:      stats.current_target,
+    molecules_screened:  stats.molecules_screened,
+    life_earned:         stats.life_earned,
+    targets_contributed: stats.targets_contributed,
+    network:             stats.network,
+    last_updated:        stats.last_updated,
+    peak_boltz_score:    stats.scoring_history.length
+      ? Math.max(...stats.scoring_history.map(r => r.best_score || 0))
+      : null,
+  }, null, 2);
+
+  return `You are LIFE AGENT — an AI assistant built into the LIFE Compute cancer drug discovery mining network. You help miners maximize their $LIFE earnings by building better molecule search algorithms.
+
+You have access to their current mining stats: ${statsStr}
+
+Your specialties:
+- Helping miners build custom adaptive stacks (PULSE sweeps, ML predictors, molecule generators)
+- Writing Python code for better molecule selection strategies
+- Explaining cancer target biology and what chemical features bind well
+- Debugging Boltz2 scoring issues
+- Optimizing mining performance
+- Explaining LIFE Compute mechanics
+
+The adaptive/ directory is where miners build their custom search stack. life_generate.py, life_chembl.py and life_diversity.py are provided as starting tools. Help miners build life_pulse.py, life_art.py and life_scout.py themselves for competitive advantage.
+
+Current network stats: ${statsStr}`;
+}
+
 /* ── HTTP server ─────────────────────────────────────────────────── */
-http.createServer((req, res) => {
+http.createServer(async (req, res) => {
   const url    = req.url.split('?')[0];
   const local  = isLocalhost(req);
+
+  /* CORS preflight — allow all origins for dashboard use */
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin':  '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    });
+    res.end();
+    return;
+  }
 
   /* /feed — public: last 20 raw boltz scores, newest first */
   if (url === '/feed') {
@@ -348,7 +467,54 @@ http.createServer((req, res) => {
     return;
   }
 
-  // Static files from dist/
+  /* ── LIFE AGENT endpoints ─────────────────────────────────────── */
+
+  /* /agent/status — public: tells frontend if ANTHROPIC_API_KEY is configured */
+  if (url === '/agent/status') {
+    const configured = !!(process.env.ANTHROPIC_API_KEY || '').trim();
+    res.writeHead(200, {
+      'Content-Type':                'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify({ configured }));
+    return;
+  }
+
+  /* /agent/chat — POST: proxy chat request to Anthropic API */
+  if (url === '/agent/chat') {
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Method Not Allowed — use POST' }));
+      return;
+    }
+    const apiKey = (process.env.ANTHROPIC_API_KEY || '').trim();
+    if (!apiKey) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured in .env' }));
+      return;
+    }
+    try {
+      const body     = await readBody(req);
+      const messages = body.messages;
+      if (!Array.isArray(messages) || messages.length === 0) {
+        throw new Error('messages array required');
+      }
+      const system = buildAgentSystemPrompt();
+      const reply  = await callAnthropic(apiKey, system, messages);
+      res.writeHead(200, {
+        'Content-Type':                'application/json',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(JSON.stringify({ content: reply }));
+    } catch (e) {
+      console.error('[LIFE AGENT] chat error:', e.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  /* ── Static files from dist/ ─────────────────────────────────── */
   let filePath = path.join(DIST, url === '/' ? 'index.html' : url);
   if (!fs.existsSync(filePath)) filePath = path.join(DIST, 'index.html');
 
@@ -363,4 +529,6 @@ http.createServer((req, res) => {
   console.log(`LIFE Compute dashboard → http://localhost:${PORT}`);
   console.log(`Public stats feed     → http://localhost:${PORT}/stats`);
   console.log(`Private diagnostics   → http://localhost:${PORT}/private/stats  (localhost only)`);
+  console.log(`LIFE AGENT status     → http://localhost:${PORT}/agent/status`);
+  console.log(`LIFE AGENT chat       → http://localhost:${PORT}/agent/chat  (POST)`);
 });

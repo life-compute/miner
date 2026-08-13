@@ -1001,6 +1001,361 @@ function GeneratedPanel({ generated }) {
   )
 }
 
+/* ─── LIFE AGENT panel ──────────────────────────────────────── */
+
+/** Minimal code-block syntax highlighter (no external deps). */
+function highlightCode(code, lang) {
+  if (!lang) return code
+  const e = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  let s = e(code)
+  // strings
+  s = s.replace(/(&#39;|&quot;|`)(.*?)\1/g, '<span style="color:#ce9178">$1$2$1</span>')
+  // keywords
+  const kws = lang === 'python'
+    ? ['def','class','return','import','from','as','if','elif','else','for','while',
+       'in','not','and','or','True','False','None','with','try','except','raise',
+       'yield','lambda','pass','break','continue','async','await']
+    : ['const','let','var','function','return','if','else','for','while','in',
+       'of','new','class','import','from','export','default','async','await',
+       'try','catch','throw','true','false','null','undefined']
+  kws.forEach(kw => {
+    s = s.replace(new RegExp(`\\b(${kw})\\b`, 'g'), `<span style="color:#569cd6">$1</span>`)
+  })
+  // comments
+  s = s.replace(/(#[^\n]*|\/\/[^\n]*)/g, '<span style="color:#6a9955">$1</span>')
+  // numbers
+  s = s.replace(/\b(\d+\.?\d*)\b/g, '<span style="color:#b5cea8">$1</span>')
+  return s
+}
+
+/** Parse markdown-ish text into segments: text, code-block, inline-code. */
+function parseContent(text) {
+  const segs = []
+  const codeBlockRe = /```(\w*)\n?([\s\S]*?)```/g
+  let last = 0, m
+  while ((m = codeBlockRe.exec(text)) !== null) {
+    if (m.index > last) segs.push({ type: 'text', content: text.slice(last, m.index) })
+    segs.push({ type: 'code', lang: m[1] || 'text', content: m[2] })
+    last = m.index + m[0].length
+  }
+  if (last < text.length) segs.push({ type: 'text', content: text.slice(last) })
+  return segs
+}
+
+/** Render a single message segment (text or code block). */
+function MsgSegment({ seg }) {
+  if (seg.type === 'code') {
+    const html = highlightCode(seg.content, seg.lang)
+    return (
+      <div style={{
+        background:    '#020a02',
+        border:        `1px solid ${T.border}`,
+        borderLeft:    `3px solid ${T.green}`,
+        borderRadius:  '2px',
+        padding:       '10px 14px',
+        margin:        '8px 0',
+        overflowX:     'auto',
+        position:      'relative',
+      }}>
+        {seg.lang && (
+          <div style={{ fontSize:'9px', color: T.textDim, letterSpacing:'0.14em',
+                        marginBottom:'6px', textTransform:'uppercase' }}>{seg.lang}</div>
+        )}
+        <pre style={{ margin:0, fontFamily: T.mono, fontSize:'11px', lineHeight:1.7,
+                      color: T.text, whiteSpace:'pre-wrap', wordBreak:'break-word' }}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      </div>
+    )
+  }
+  // plain text — render bold, inline-code
+  const parts = seg.content.split(/(`[^`]+`|\*\*[^*]+\*\*)/g)
+  return (
+    <span style={{ lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+      {parts.map((p, i) => {
+        if (p.startsWith('`') && p.endsWith('`'))
+          return <code key={i} style={{ background:'#020a02', border:`1px solid ${T.border}`,
+                                         color: T.cyan, padding:'1px 5px', fontSize:'10px',
+                                         fontFamily: T.mono, borderRadius:'2px' }}>
+            {p.slice(1,-1)}
+          </code>
+        if (p.startsWith('**') && p.endsWith('**'))
+          return <strong key={i} style={{ color: T.textBright }}>{p.slice(2,-2)}</strong>
+        return <span key={i}>{p}</span>
+      })}
+    </span>
+  )
+}
+
+/** Single chat bubble. */
+function ChatBubble({ role, content }) {
+  const isUser = role === 'user'
+  const segs   = parseContent(content)
+  return (
+    <div style={{
+      display:       'flex',
+      flexDirection: isUser ? 'row-reverse' : 'row',
+      gap:           '10px',
+      marginBottom:  '14px',
+      alignItems:    'flex-start',
+    }}>
+      {/* avatar pip */}
+      <div style={{
+        flexShrink:    0,
+        width:         '22px',
+        height:        '22px',
+        border:        `1px solid ${isUser ? T.cyan : T.green}`,
+        display:       'flex',
+        alignItems:    'center',
+        justifyContent:'center',
+        fontSize:      '9px',
+        color:         isUser ? T.cyan : T.green,
+        textShadow:    glow(isUser ? T.cyan : T.green, 2),
+        background:    isUser ? '#000a0a' : '#000a00',
+        letterSpacing: '0.08em',
+        marginTop:     '2px',
+      }}>
+        {isUser ? 'YOU' : 'AI'}
+      </div>
+      <div style={{
+        flex:          1,
+        background:    isUser ? '#000a0a' : '#020a02',
+        border:        `1px solid ${isUser ? T.cyan + '33' : T.green + '33'}`,
+        borderRadius:  '2px',
+        padding:       '10px 14px',
+        fontSize:      '12px',
+        color:         T.text,
+        maxWidth:      '90%',
+      }}>
+        {segs.map((seg, i) => <MsgSegment key={i} seg={seg} />)}
+      </div>
+    </div>
+  )
+}
+
+function LifeAgentPanel() {
+  const [configured, setConfigured] = useState(null)  // null=loading, bool
+  const [messages,   setMessages]   = useState([])     // {role, content}[]
+  const [input,      setInput]      = useState('')
+  const [loading,    setLoading]    = useState(false)
+  const [error,      setError]      = useState(null)
+  const bottomRef = useRef()
+  const inputRef  = useRef()
+
+  // Check API key presence once
+  useEffect(() => {
+    fetch('/agent/status')
+      .then(r => r.json())
+      .then(d => setConfigured(d.configured))
+      .catch(() => setConfigured(false))
+  }, [])
+
+  // Scroll to bottom on new messages
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, loading])
+
+  async function send() {
+    const text = input.trim()
+    if (!text || loading) return
+    setInput('')
+    setError(null)
+    const newMessages = [...messages, { role: 'user', content: text }]
+    setMessages(newMessages)
+    setLoading(true)
+    try {
+      const res = await fetch('/agent/chat', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ messages: newMessages }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`)
+      setMessages([...newMessages, { role: 'assistant', content: data.content }])
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+      inputRef.current?.focus()
+    }
+  }
+
+  function onKeyDown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
+  }
+
+  // Loading state
+  if (configured === null) return null
+
+  return (
+    <Panel accent={T.green} style={{ gridColumn: '1 / -1' }}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(T.green)}>◈</span>
+        <span>LIFE AGENT</span>
+        <span style={{ marginLeft: 'auto', ...S.pill(T.green) }}>CLAUDE&nbsp;SONNET&nbsp;4&nbsp;·&nbsp;AI&nbsp;ASSISTANT</span>
+      </div>
+
+      {!configured ? (
+        /* ── No API key configured ── */
+        <div style={{
+          padding:      '28px',
+          textAlign:    'center',
+          border:       `1px dashed ${T.border}`,
+          borderRadius: '2px',
+          background:   '#020902',
+        }}>
+          <div style={{ fontSize:'28px', marginBottom:'12px', opacity:0.5 }}>🤖</div>
+          <div style={{ fontSize:'13px', color: T.textDim, letterSpacing:'0.06em',
+                        lineHeight: 1.8 }}>
+            Add <code style={{ color: T.cyan, background:'#020a0a', padding:'2px 7px',
+                                border:`1px solid ${T.border}`, fontFamily: T.mono,
+                                fontSize:'11px' }}>ANTHROPIC_API_KEY</code> to{' '}
+            <code style={{ color: T.green, background:'#020902', padding:'2px 7px',
+                            border:`1px solid ${T.border}`, fontFamily: T.mono,
+                            fontSize:'11px' }}>.env</code>{' '}
+            to activate LIFE AGENT
+          </div>
+          <div style={{ marginTop:'14px', fontSize:'10px', color: T.textDim,
+                        letterSpacing:'0.12em' }}>
+            Then restart: <code style={{ color: T.greenDim, fontFamily: T.mono }}>pm2 restart life-dashboard</code>
+          </div>
+        </div>
+      ) : (
+        /* ── Chat interface ── */
+        <>
+          {/* message history */}
+          <div style={{
+            height:     '420px',
+            overflowY:  'auto',
+            padding:    '8px 4px',
+            marginBottom:'14px',
+            border:     `1px solid ${T.border}`,
+            background: '#010701',
+            borderRadius:'2px',
+          }}>
+            {messages.length === 0 && !loading && (
+              <div style={{ padding:'24px 16px', color: T.textDim, fontSize:'11px',
+                            lineHeight: 2, letterSpacing:'0.06em' }}>
+                <div style={{ color: T.green, marginBottom:'8px', textShadow: glow(T.green, 3) }}>
+                  LIFE AGENT ONLINE
+                </div>
+                I can help you build a better mining stack. Try asking:<br/>
+                <span style={{ color: T.cyan }}>→ "How do I build life_pulse.py?"</span><br/>
+                <span style={{ color: T.cyan }}>→ "Write a Sobol sweep for molecule search"</span><br/>
+                <span style={{ color: T.cyan }}>→ "Why is my Boltz2 score low on KRAS?"</span><br/>
+                <span style={{ color: T.cyan }}>→ "What chemical features bind TP53?"</span>
+              </div>
+            )}
+
+            {messages.map((msg, i) => (
+              <ChatBubble key={i} role={msg.role} content={msg.content} />
+            ))}
+
+            {loading && (
+              <div style={{ display:'flex', gap:'10px', alignItems:'flex-start', marginBottom:'14px' }}>
+                <div style={{ flexShrink:0, width:'22px', height:'22px',
+                              border:`1px solid ${T.green}`, display:'flex',
+                              alignItems:'center', justifyContent:'center',
+                              fontSize:'9px', color: T.green, background:'#000a00',
+                              letterSpacing:'0.08em' }}>AI</div>
+                <div style={{ padding:'10px 14px', background:'#020a02',
+                              border:`1px solid ${T.green}33`, borderRadius:'2px',
+                              fontSize:'12px', color: T.textDim }}>
+                  <span style={{ animation:'blink 0.8s step-end infinite', color: T.green }}>█</span>
+                  {' '}THINKING…
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <div style={{ padding:'8px 14px', background:'#0a0006',
+                            border:`1px solid ${T.red}44`, color: T.red,
+                            fontSize:'11px', marginBottom:'8px', borderRadius:'2px' }}>
+                ERROR: {error}
+              </div>
+            )}
+
+            <div ref={bottomRef} />
+          </div>
+
+          {/* input row */}
+          <div style={{ display:'flex', gap:'8px', alignItems:'flex-end' }}>
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="Ask LIFE AGENT anything… (Enter to send, Shift+Enter for newline)"
+              rows={2}
+              style={{
+                flex:        1,
+                background:  '#010701',
+                border:      `1px solid ${T.border}`,
+                borderRadius:'2px',
+                color:       T.text,
+                fontFamily:  T.mono,
+                fontSize:    '12px',
+                padding:     '10px 12px',
+                resize:      'vertical',
+                outline:     'none',
+                lineHeight:  1.6,
+                letterSpacing:'0.04em',
+              }}
+              onFocus={e => { e.target.style.borderColor = T.green + '88' }}
+              onBlur={e  => { e.target.style.borderColor = T.border }}
+            />
+            <button
+              onClick={send}
+              disabled={loading || !input.trim()}
+              style={{
+                background:   loading || !input.trim() ? '#0a150a' : T.green + '18',
+                border:       `1px solid ${loading || !input.trim() ? T.border : T.green + '88'}`,
+                color:        loading || !input.trim() ? T.textDim : T.green,
+                fontFamily:   T.mono,
+                fontSize:     '11px',
+                letterSpacing:'0.12em',
+                padding:      '10px 18px',
+                cursor:       loading || !input.trim() ? 'not-allowed' : 'pointer',
+                borderRadius: '2px',
+                textShadow:   loading || !input.trim() ? 'none' : glow(T.green, 3),
+                transition:   'all 0.2s',
+                height:       '100%',
+                whiteSpace:   'nowrap',
+              }}
+            >
+              {loading ? 'WAIT…' : 'SEND ▶'}
+            </button>
+            {messages.length > 0 && (
+              <button
+                onClick={() => { setMessages([]); setError(null) }}
+                disabled={loading}
+                style={{
+                  background:   '#0a0008',
+                  border:       `1px solid ${T.purple}44`,
+                  color:        T.textDim,
+                  fontFamily:   T.mono,
+                  fontSize:     '10px',
+                  letterSpacing:'0.1em',
+                  padding:      '10px 12px',
+                  cursor:       loading ? 'not-allowed' : 'pointer',
+                  borderRadius: '2px',
+                  height:       '100%',
+                }}
+              >
+                CLEAR
+              </button>
+            )}
+          </div>
+          <div style={{ marginTop:'8px', fontSize:'9px', color: T.textDim,
+                        letterSpacing:'0.1em' }}>
+            ENTER = SEND · SHIFT+ENTER = NEWLINE · HISTORY PRESERVED IN SESSION
+          </div>
+        </>
+      )}
+    </Panel>
+  )
+}
+
 /* ─── CSS ───────────────────────────────────────────────────── */
 const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
@@ -1141,6 +1496,14 @@ export default function App() {
                 <GeneratedPanel generated={priv?.generated} />
               </>
             )}
+
+            {/* LIFE AGENT — full-width AI assistant */}
+            <div style={S.sectionLabel}>
+              <div style={S.sectionTick} />
+              AI // LIFE AGENT — MINING ASSISTANT
+            </div>
+            <LifeAgentPanel />
+
           </div>
 
           {/* ── Footer ── */}
