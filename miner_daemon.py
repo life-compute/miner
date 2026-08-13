@@ -73,6 +73,7 @@ IDL_PATH   = ANCHOR_DIR / "target/idl/life_core.json"
 NOVA_DIR  = Path("/mnt/minos-drive/nova_subnet")
 NOVA_VENV = NOVA_DIR / ".venv" / "bin" / "python"
 MSA_DIR   = Path("/mnt/minos-drive/life-compute-miner/data/msa_files")
+BOLTZ_SEED = 68   # Boltz2 random seed — included in submission so validator uses same seed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -207,6 +208,7 @@ smiles    = args["smiles"]
 target_id = args["target_id"]
 msa_path  = args["msa_path"]
 sequence  = args["sequence"]
+seed      = args.get("seed", 68)
 
 scores = score_batch([smiles], target_id, sequence, msa_path)
 boltz_score = scores.get(smiles)
@@ -216,6 +218,7 @@ print(json.dumps({{
     "smiles":      smiles,
     "target_id":   target_id,
     "msa_path":    msa_path,
+    "seed":        seed,
 }}))
 """
 
@@ -278,6 +281,7 @@ def run_boltz2_scoring(smiles: str, target: dict) -> dict:
         "target_id": target_id,
         "msa_path":  msa_path,
         "sequence":  sequence,
+        "seed":      BOLTZ_SEED,
     })
 
     with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False,
@@ -326,7 +330,8 @@ def _boltz_score_to_affinity(boltz_score) -> float | None:
 
 # ── On-chain submission via Node.js / Anchor ──────────────────────────────────
 
-def submit_on_chain(target_id_num: int, smiles: str, affinity: float) -> dict | None:
+def submit_on_chain(target_id_num: int, smiles: str, affinity: float,
+                    boltz_seed: int = BOLTZ_SEED) -> dict | None:
     """Submit result via Node.js / Anchor. Returns {'tx': ..., 'epoch': ...} or None."""
     args = {
         "rpc":          SOLANA_RPC,
@@ -337,6 +342,7 @@ def submit_on_chain(target_id_num: int, smiles: str, affinity: float) -> dict | 
         "targetIdNum":  target_id_num,
         "smiles":       smiles,
         "affinity":     affinity,
+        "boltzSeed":    boltz_seed,
     }
     try:
         result = subprocess.run(
@@ -345,14 +351,29 @@ def submit_on_chain(target_id_num: int, smiles: str, affinity: float) -> dict | 
             cwd=str(ANCHOR_DIR),
         )
         if result.returncode != 0:
-            log.error(f"submit node error: {result.stderr[-500:] or result.stdout[-300:]}")
+            log.error(f"submit node FAILED (rc={result.returncode})")
+            if result.stderr.strip():
+                log.error(f"stderr:\n{result.stderr.strip()}")
+            if result.stdout.strip():
+                log.error(f"stdout:\n{result.stdout.strip()}")
             return None
+        # Forward verbose diagnostics from life_submit.js.
+        # When already_submitted, promote to INFO so on-chain state is visible
+        # in normal logs without needing -v.
+        parsed_resp = None
         for line in reversed(result.stdout.strip().splitlines()):
             try:
-                return json.loads(line)
+                parsed_resp = json.loads(line)
+                break
             except Exception:
                 continue
-        log.warning(f"submit stdout: {result.stdout[:300]}")
+        if result.stderr.strip():
+            level = log.info if (parsed_resp and parsed_resp.get("status") == "already_submitted") else log.debug
+            for diag_line in result.stderr.strip().splitlines():
+                level(f"[node] {diag_line}")
+        if parsed_resp is not None:
+            return parsed_resp
+        log.warning(f"submit stdout (no JSON found): {result.stdout.strip()[:500]}")
         return None
     except subprocess.TimeoutExpired:
         log.error("submit timed out after 120s")
@@ -625,8 +646,9 @@ def main():
         result  = run_boltz2_scoring(mol, target)
         elapsed = time.time() - t0
 
-        boltz_score = result.get("boltz_score")
-        affinity    = _boltz_score_to_affinity(boltz_score)
+        boltz_score     = result.get("boltz_score")
+        boltz_seed_used = result.get("seed", BOLTZ_SEED)
+        affinity        = _boltz_score_to_affinity(boltz_score)
 
         # Record reference compound score so we can use a relative threshold.
         # If ref compound scores X, effective threshold = X + 0.5 kcal/mol.
@@ -702,7 +724,7 @@ def main():
                     _chembl_result = {}
             else:
                 _chembl_result = {}
-            resp = submit_on_chain(TARGET_ID_MAP[tid], mol, affinity)
+            resp = submit_on_chain(TARGET_ID_MAP[tid], mol, affinity, boltz_seed=boltz_seed_used)
             if resp and resp.get("tx"):
                 tx_sig = resp["tx"]
                 life_earned += 1.0
