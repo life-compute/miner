@@ -411,29 +411,58 @@ def run_sweep(
         print(f"[PULSE] evaluated={evaluated}  total_seen={len(seen)}  next_idx={idx}")
 
 
+def _load_boltz_scored_smiles() -> set[str]:
+    """Return the set of SMILES that have already received a real Boltz2 score."""
+    scored: set[str] = set()
+    boltz_path = OUTPUT_DIR / "life_boltz_scores.jsonl"
+    if not boltz_path.exists():
+        return scored
+    try:
+        for line in boltz_path.read_text().splitlines():
+            r = json.loads(line)
+            smi = r.get("smiles", "")
+            if smi:
+                scored.add(smi)
+    except Exception:
+        pass
+    return scored
+
+
 def get_next_candidates(
     n: int = 50,
     family_filter: Optional[str] = None,
 ) -> list[dict]:
     """
-    Return up to n pulse rows with proxy_score > 0 that have not yet been
-    Boltz2-scored (no boltz_score field or boltz_score is None).
+    Return up to n pulse rows with proxy_score > 0 that have NOT yet been
+    Boltz2-scored.
 
-    Used by Phase 1 of the epoch loop in miner_daemon.py.
+    NOTE: Boltz2 scores are stored in life_boltz_scores.jsonl, NOT in this
+    JSONL file — so the legacy ``r.get("boltz_score") is not None`` check
+    was always False and never filtered anything.  We now load the real
+    scored-SMILES set and skip them here so already-evaluated molecules
+    are never re-selected by the adaptive stack.
     """
     if not PULSE_JSONL.exists():
         return []
+
+    # Load real scored molecules to exclude (cross-file lookup)
+    already_scored = _load_boltz_scored_smiles()
+
     rows = []
     seen_smi: set[str] = set()
     for line in PULSE_JSONL.read_text().splitlines():
         try:
             r = json.loads(line)
+            # Legacy in-row boltz_score field (kept for forward-compat)
             if r.get("boltz_score") is not None:
                 continue
             if float(r.get("proxy_score", 0.0)) <= 0:
                 continue
             smi = r.get("smiles", "")
             if not smi or smi in seen_smi:
+                continue
+            # Skip molecules that already have a real Boltz2 score
+            if smi in already_scored:
                 continue
             if family_filter and r.get("family") != family_filter:
                 continue

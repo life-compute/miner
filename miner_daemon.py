@@ -471,8 +471,14 @@ def main():
     life_earned    : float            = 0.0
     txs            : list             = []
     ref_compounds  : dict[str, str]   = {}
-    epoch_screened : set[str]         = set()   # ref SMILES screened this epoch
-    ref_scores     : dict[str, float] = {}       # {target_id: ref_compound_affinity this epoch}
+    epoch_screened : set[str]         = set()    # ref SMILES screened this epoch
+    ref_scores     : dict[str, float] = {}        # {target_id: ref_compound_affinity this epoch}
+    # Reference compound re-screening gate: only allow one ref-compound run per
+    # target per REF_RESCREEN_INTERVAL seconds (default 4 h).  Without this
+    # gate epoch_screened.clear() (every 300 s) caused the ref compound to
+    # consume 34 % of all Boltz2 calls.
+    REF_RESCREEN_INTERVAL : float = 4 * 3600.0  # 4 hours
+    ref_last_screened : dict[str, float] = {}    # {target_id: last_screened_ts}
 
     # ── Adaptive state ─────────────────────────────────────────────────────────
     # epoch_start_time: when the current TARGET_REFRESH epoch started
@@ -586,12 +592,16 @@ def main():
             adaptive_phase = "generate"   # Phase 4: generative AI (final 15%)
 
         # ── MOLECULE SELECTION ────────────────────────────────────────────────
-        # Priority 1: reference compound for this target (if not yet screened)
+        # Priority 1: reference compound for this target (if not yet screened
+        # within REF_RESCREEN_INTERVAL — prevents ref compound from consuming
+        # most Boltz2 calls when epoch_screened resets every 300 s).
         ref_smi = ref_compounds.get(tid) if ref_compounds else None
-        if ref_smi and ref_smi not in epoch_screened:
+        ref_due = (now - ref_last_screened.get(tid, 0.0)) >= REF_RESCREEN_INTERVAL
+        if ref_smi and ref_due:
             mol    = ref_smi
             is_ref = True
             epoch_screened.add(ref_smi)
+            ref_last_screened[tid] = now
             log.info(f"[REF] Screening reference compound for {tid}: {mol[:50]}")
 
         elif _ADAPTIVE_AVAILABLE and ADAPTIVE_ENABLED:
@@ -639,11 +649,22 @@ def main():
                             f"diverse={scout_diag.get('n_diverse', '?')}"
                         )
                     else:
-                        # Scout returned nothing — pulse seed + random fallback
+                        # Scout returned nothing — run pulse seed then sample a
+                        # novel molecule from the expanded PULSE pool (not the
+                        # hard-coded SCAFFOLDS which are already exhausted and
+                        # in life_boltz_scores.jsonl).
                         log.warning("[ADAPTIVE] Scout returned no candidates — running pulse seed")
                         run_sweep(max_configs=50, verbose=False)
-                        mol    = random.choice(SCAFFOLDS)
-                        is_ref = False
+                        novel_rows = get_next_candidates(n=20, family_filter=None)
+                        if novel_rows:
+                            mol    = novel_rows[0]["smiles"]
+                            is_ref = False
+                            log.info(f"[ADAPTIVE] fallback: pulled novel molecule from PULSE pool  {mol[:60]}")
+                        else:
+                            # True vocabulary exhaustion — sample ZINC15 random
+                            mol    = _sample_zinc15()
+                            is_ref = False
+                            log.info("[ADAPTIVE] fallback: PULSE pool empty, using ZINC15 random")
             except Exception as _ae:
                 log.warning(f"[ADAPTIVE] scout failed ({_ae}) — random scaffold fallback")
                 mol    = random.choice(SCAFFOLDS)
