@@ -1001,7 +1001,7 @@ export default function App() {
                 LIFE COMPUTE — DECENTRALIZED DRUG DISCOVERY NETWORK
               </div>
               <div style={{ fontSize: '10px', color: T.textDim, letterSpacing: '0.16em' }}>
-                POWERED BY BOLTZ2 MOLECULAR DOCKING · SOLANA BLOCKCHAIN · BITTENSOR SUBNET
+                POWERED BY BOLTZ2 MOLECULAR DOCKING · SOLANA BLOCKCHAIN
               </div>
             </div>
             <div style={S.statusBadge(alive)}>
