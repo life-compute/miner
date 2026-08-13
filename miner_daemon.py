@@ -408,6 +408,7 @@ def main():
             ref_compounds = fetch_reference_compounds()
             log.info(f"Reference compounds loaded: {len(ref_compounds)} ({', '.join(ref_compounds)})")
             ref_scores.clear()
+            ref_last_screened.clear()  # reset timer so ref is scored on next iteration
             for t in targets:
                 uid  = t["uniprot_id"]
                 flag = "✓ MSA" if _msa_path_for(uid) != "empty" else "✗ no MSA (single-seq)"
