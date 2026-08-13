@@ -308,12 +308,30 @@ class PulseState:
     total_evaluated : int
         Cumulative count of molecules written to the JSONL since the sweep
         was first created.
+    tanimoto_attempts : int
+        Lifetime count of TanimotoFilter.is_duplicate() calls.
+    tanimoto_passes : int
+        Lifetime count of calls returning False (novel molecules).
+    mutant_attempted : int
+        Lifetime count of EliteMutator rows generated (before filter).
+    mutant_accepted : int
+        Lifetime count of EliteMutator rows written to JSONL.
+    current_batch_size : int
+        Most recent AdaptiveBatchSizer batch size (for dashboard display).
+    last_sweep_ts : float
+        Unix timestamp of the last completed sweep batch (for ACTIVE/IDLE).
     """
-    next_index:      int               = 0
-    seen:            dict[str, float]  = field(default_factory=dict)
-    elite_pool:      list[dict]        = field(default_factory=list)
-    total_evaluated: int               = 0
-    elite_capacity:  int               = 50
+    next_index:        int               = 0
+    seen:              dict[str, float]  = field(default_factory=dict)
+    elite_pool:        list[dict]        = field(default_factory=list)
+    total_evaluated:   int               = 0
+    elite_capacity:    int               = 50
+    tanimoto_attempts: int               = 0
+    tanimoto_passes:   int               = 0
+    mutant_attempted:  int               = 0
+    mutant_accepted:   int               = 0
+    current_batch_size: int              = 200
+    last_sweep_ts:     float             = 0.0
 
     # ── persistence ───────────────────────────────────────────────────────────
 
@@ -329,6 +347,12 @@ class PulseState:
                     elite_pool=raw.get("elite_pool", []),
                     total_evaluated=raw.get("total_evaluated", 0),
                     elite_capacity=raw.get("elite_capacity", 50),
+                    tanimoto_attempts=raw.get("tanimoto_attempts", 0),
+                    tanimoto_passes=raw.get("tanimoto_passes", 0),
+                    mutant_attempted=raw.get("mutant_attempted", 0),
+                    mutant_accepted=raw.get("mutant_accepted", 0),
+                    current_batch_size=raw.get("current_batch_size", 200),
+                    last_sweep_ts=raw.get("last_sweep_ts", 0.0),
                 )
             except Exception:
                 pass
@@ -720,7 +744,11 @@ def run_sweep(
             continue
 
         key = _smiles_key(canon)
-        if key in state.seen or tfilter.is_duplicate(canon):
+        state.tanimoto_attempts += 1
+        is_dup = key in state.seen or tfilter.is_duplicate(canon)
+        if not is_dup:
+            state.tanimoto_passes += 1
+        if is_dup:
             idx += 1
             continue
 
@@ -748,6 +776,8 @@ def run_sweep(
         state.total_evaluated += 1
         state.update_elite(row)
         reporter.record(row)
+        state.current_batch_size = sizer.current
+        state.last_sweep_ts = time.time()
         state.save(STATE_JSON)
 
         idx       += 1
@@ -760,6 +790,7 @@ def run_sweep(
     if use_mutants and state.elite_pool:
         mutant_target = max(10, int(max_configs * elite_fraction))
         mutants = mutator.generate(state=state, filter=tfilter)
+        state.mutant_attempted += len(mutants)
         written = 0
         for row in mutants[:mutant_target]:
             key   = _smiles_key(row["smiles"])
@@ -772,6 +803,7 @@ def run_sweep(
             state.update_elite(row)
             reporter.record(row)
             written += 1
+        state.mutant_accepted += written
         state.save(STATE_JSON)
         if verbose and written:
             print(f"[PULSE] +{written} mutant molecules from elite pool")

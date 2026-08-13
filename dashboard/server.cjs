@@ -388,6 +388,61 @@ http.createServer(async (req, res) => {
     return;
   }
 
+  /* /pulse — public: LIFE PULSE sweep status ───────────────────────────────── */
+  if (url === '/pulse') {
+    try {
+      const STATE_JSON_PATH  = path.join(OUT, 'life_pulse_state.json');
+      const PULSE_JSONL_PATH = path.join(OUT, 'life_pulse_data.jsonl');
+
+      const state = readJson(STATE_JSON_PATH) || {};
+      const rows  = tailJsonl(PULSE_JSONL_PATH, 5000);
+
+      // Active if last sweep timestamp within last 90 seconds
+      const lastSweepTs = state.last_sweep_ts || 0;
+      const sweepActive = (Date.now() / 1000 - lastSweepTs) < 90;
+
+      // Top 3 molecules by proxy_score
+      const sorted = rows
+        .filter(r => typeof r.proxy_score === 'number' && r.proxy_score > 0)
+        .sort((a, b) => b.proxy_score - a.proxy_score)
+        .slice(0, 3)
+        .map(r => ({
+          smiles:      (r.smiles || '').slice(0, 60),
+          family:      r.family || '—',
+          scaffold:    r.scaffold_name || '—',
+          proxy_score: Math.round((r.proxy_score || 0) * 10000) / 10000,
+          source:      r.source || 'pulse',
+          ts:          r.ts ? new Date(r.ts * 1000).toISOString() : null,
+        }));
+
+      const tamAttempts = state.tanimoto_attempts || 0;
+      const tamPasses   = state.tanimoto_passes   || 0;
+      const tamPassRate = tamAttempts > 0
+        ? Math.round((tamPasses / tamAttempts) * 10000) / 100
+        : null;
+
+      res.writeHead(200, {
+        'Content-Type':                'application/json',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(JSON.stringify({
+        active:             sweepActive,
+        total_evaluated:    state.total_evaluated     ?? rows.length,
+        sobol_index:        state.next_index          ?? 0,
+        current_batch_size: state.current_batch_size  ?? 200,
+        last_sweep_ts:      lastSweepTs               || null,
+        top_molecules:      sorted,
+        mutant_attempted:   state.mutant_attempted    ?? 0,
+        mutant_accepted:    state.mutant_accepted     ?? 0,
+        tanimoto_attempts:  tamAttempts,
+        tanimoto_passes:    tamPasses,
+        tanimoto_pass_rate: tamPassRate,
+        ts:                 Date.now(),
+      }));
+    } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: String(e) })); }
+    return;
+  }
+
   /* /feed — public: last 20 raw boltz scores, newest first */
   if (url === '/feed') {
     try {

@@ -37,6 +37,19 @@ except Exception as _e:
     _TOOLS_AVAILABLE = False
     _tools_err = str(_e)
 
+# ── LIFE PULSE — continuous Sobol molecular sweep ─────────────────────────────
+try:
+    from adaptive.life_pulse import (
+        run_sweep       as pulse_run_sweep,
+        get_next_candidates as pulse_get_candidates,
+        record_boltz_score  as pulse_record_boltz,
+        PULSE_JSONL,
+    )
+    _PULSE_AVAILABLE = True
+except Exception as _pe:
+    _PULSE_AVAILABLE = False
+    _pulse_err = str(_pe)
+
 # ── Config ────────────────────────────────────────────────────────────────────
 def _env(key, default=""):
     return os.environ.get(key, default)
@@ -103,7 +116,33 @@ def _pick_molecule(target: dict, sub_memory, best_smiles: list[str]) -> tuple[st
     -------
     (smiles, label)  — label is logged and stored for diagnostics
     """
-    # ── Generative AI (wire in when you have real Boltz2 scores to learn from)
+    # ── Priority 1: LIFE PULSE top candidates (Sobol sweep + EliteMutator)
+    if _PULSE_AVAILABLE:
+        try:
+            # Map target ID to protein family for focused sampling
+            family = None
+            tid = target.get("id", "").upper()
+            if tid in ("EGFR", "HER2", "KRAS", "BRAF", "VEGFR2", "FGFR1", "RET",
+                       "ABL1", "CDK4", "FLT3", "JAK2", "NTRK1"):
+                family = "kinase"
+            elif tid in ("BCL2", "MDM2", "PDL1", "STAT3", "MYC"):
+                family = "cytokine"
+            elif tid in ("PARP1", "HDAC1", "HDAC2"):
+                family = "protease"
+            elif tid in ("AR", "ESR1"):
+                family = "nuclear_receptor"
+
+            pulse_cands = pulse_get_candidates(n=20, family_filter=family)
+            if pulse_cands and sub_memory is not None:
+                novel = sub_memory.filter_novel([r["smiles"] for r in pulse_cands])
+                if novel:
+                    return novel[0], "pulse"
+            elif pulse_cands:
+                return pulse_cands[0]["smiles"], "pulse"
+        except Exception as _pulse_pick_err:
+            log.debug(f"[PULSE] candidate pick failed (non-fatal): {_pulse_pick_err}")
+
+    # ── Priority 2: Generative AI (when real Boltz2 scores available)
     if _TOOLS_AVAILABLE and best_smiles and sub_memory is not None:
         try:
             gen_cands = generate_candidates(target, art_model=None, n_total=50)
@@ -114,7 +153,7 @@ def _pick_molecule(target: dict, sub_memory, best_smiles: list[str]) -> tuple[st
         except Exception as _ge:
             log.debug(f"[GENERATE] failed (non-fatal): {_ge}")
 
-    # ── Default: random ZINC15 sample
+    # ── Priority 3: random ZINC15 sample (always works)
     return _sample_zinc15(), "zinc15"
 
 
@@ -484,6 +523,32 @@ def main():
                 log.warning(f"[ChEMBL] Background download failed (non-fatal): {_ce}")
         threading.Thread(target=_bg_chembl, daemon=True, name="chembl-prefetch").start()
 
+    # ── LIFE PULSE background sweep ────────────────────────────────────────────
+    if _PULSE_AVAILABLE:
+        def _pulse_loop():
+            """Run continuous Sobol sweep in a background daemon thread.
+
+            Runs in batches of 50 molecules.  Sleeps 2 s between batches to
+            yield the GIL to the main scoring loop.  Never raises — all
+            exceptions are caught and logged so a PULSE crash never kills the
+            miner process.
+            """
+            log.info("[PULSE] Background sweep thread started")
+            while True:
+                try:
+                    pulse_run_sweep(
+                        max_configs=50,
+                        verbose=False,
+                        use_mutants=True,
+                        tanimoto_threshold=0.85,
+                    )
+                except Exception as _be:
+                    log.warning(f"[PULSE] sweep error (non-fatal): {_be}")
+                time.sleep(2)
+        threading.Thread(target=_pulse_loop, daemon=True, name="pulse-sweep").start()
+    else:
+        log.warning(f"[PULSE] life_pulse unavailable — pulse sweep disabled ({_pulse_err})")
+
     stats = {
         "alive": True,
         "current_target": "",
@@ -611,6 +676,12 @@ def main():
             best_boltz_smiles = best_boltz_smiles[-50:]
             if sub_memory is not None:
                 sub_memory.mark_submitted(mol, boltz_score)
+            # Write confirmed Boltz2 score back to PULSE so it can learn ──────
+            if _PULSE_AVAILABLE and source == "pulse":
+                try:
+                    pulse_record_boltz(mol, boltz_score, tid)
+                except Exception as _pbe:
+                    log.debug(f"[PULSE] record_boltz failed (non-fatal): {_pbe}")
 
         # ── On-chain submission ───────────────────────────────────────────────
         tx_sig = None

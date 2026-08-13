@@ -834,6 +834,123 @@ function PrivateNote() {
   )
 }
 
+/* ─── LIFE PULSE panel (dedicated /pulse endpoint) ──────────── */
+function LifePulsePanel({ pulse }) {
+  if (!pulse) return (
+    <Panel accent={T.green} style={{ gridColumn: 'span 2' }}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(T.green)}>⚡</span>
+        <span>LIFE PULSE — MOLECULAR SWEEP ENGINE</span>
+      </div>
+      <div style={{ color: T.textDim, fontSize: '11px', padding: '8px 0' }}>
+        AWAITING PULSE DATA…<span style={{ animation: 'blink 1s step-end infinite', color: T.green }}> █</span>
+      </div>
+    </Panel>
+  )
+
+  const {
+    active = false,
+    total_evaluated = 0,
+    sobol_index = 0,
+    current_batch_size = 200,
+    top_molecules = [],
+    mutant_attempted = 0,
+    mutant_accepted = 0,
+    tanimoto_attempts = 0,
+    tanimoto_pass_rate = null,
+  } = pulse
+
+  const accent       = active ? T.green : T.textDim
+  const statusLabel  = active ? 'ACTIVE' : 'IDLE'
+  const statusColor  = active ? T.green  : T.textDim
+  const FCOL = { kinase: T.purple, cytokine: '#ff69b4', protease: '#ff8c00', nuclear_receptor: T.cyan, general: T.green }
+
+  return (
+    <Panel accent={accent} style={{ gridColumn: 'span 2' }}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(T.green)}>⚡</span>
+        <span>LIFE PULSE — MOLECULAR SWEEP ENGINE</span>
+        <span style={{ marginLeft: 'auto', ...S.pill(statusColor) }}>
+          {active && <span style={{ display:'inline-block', width:6, height:6, borderRadius:'50%',
+            background:T.green, boxShadow:glow(T.green,3), marginRight:5,
+            animation:'blink 1.2s step-end infinite' }} />}
+          {statusLabel}
+        </span>
+      </div>
+
+      {/* ── Top stats row ── */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'12px', marginBottom:'16px' }}>
+        {[
+          { v: total_evaluated.toLocaleString(), l: 'MOLECULES EXPLORED', c: T.green },
+          { v: sobol_index.toLocaleString(),     l: 'SOBOL INDEX',         c: T.cyan },
+          { v: current_batch_size,               l: 'BATCH SIZE (ADAPTIVE)',c: T.purple },
+          { v: tanimoto_pass_rate != null ? `${tanimoto_pass_rate.toFixed(1)}%` : '—',
+            l: 'DIVERSITY PASS RATE', c: tanimoto_pass_rate != null && tanimoto_pass_rate < 30 ? T.red : T.green },
+        ].map(({ v, l, c }) => (
+          <div key={l} style={{ padding:'10px 12px', background:'#020902',
+                                border:`1px solid ${c}22`, borderRadius:'2px' }}>
+            <div style={{ fontSize:'22px', fontWeight:700, color:c, textShadow:glow(c,3),
+                          fontVariantNumeric:'tabular-nums' }}>{v}</div>
+            <div style={{ fontSize:'9px', color:T.textDim, letterSpacing:'0.14em',
+                          marginTop:'3px' }}>{l}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Mutator stats ── */}
+      <div style={{ display:'flex', gap:'16px', marginBottom:'14px', fontSize:'11px' }}>
+        <div style={S.kv}>
+          <span style={{ color:T.textDim, fontSize:'10px', letterSpacing:'0.1em' }}>ELITE_MUTATIONS_ATTEMPTED</span>
+        </div>
+        <span style={{ color:T.purple, fontWeight:700, textShadow:glow(T.purple,2) }}>
+          {mutant_attempted.toLocaleString()}
+        </span>
+        <span style={{ color:T.textDim }}>/</span>
+        <div style={S.kv}>
+          <span style={{ color:T.textDim, fontSize:'10px', letterSpacing:'0.1em' }}>ACCEPTED</span>
+        </div>
+        <span style={{ color: mutant_accepted > 0 ? T.green : T.textDim, fontWeight:700 }}>
+          {mutant_accepted.toLocaleString()}
+        </span>
+        {mutant_attempted > 0 && (
+          <span style={{ ...S.pill(T.cyan), marginLeft:'auto' }}>
+            {Math.round(mutant_accepted / mutant_attempted * 100)}% ACCEPT
+          </span>
+        )}
+      </div>
+      {/* ── Top 3 elite molecules ── */}
+      <div style={{ fontSize:'10px', color:T.textDim, letterSpacing:'0.14em',
+                    marginBottom:'8px' }}>TOP CANDIDATES THIS SESSION</div>
+      {top_molecules.length === 0 ? (
+        <div style={{ color:T.textDim, fontSize:'11px', padding:'8px 0' }}>
+          SWEEPING…<span style={{ animation:'blink 1s step-end infinite', color:T.green }}> █</span>
+        </div>
+      ) : top_molecules.map((m, i) => (
+        <div key={i} style={{ ...S.terminalLine,
+          background: i === 0 ? '#00ff4106' : 'transparent',
+          padding: '7px 0',
+          borderBottom: `1px solid ${i < 2 ? T.border : 'transparent'}` }}>
+          <span style={{ color:T.greenDim, flexShrink:0, fontSize:'11px', minWidth:16 }}>
+            #{i+1}
+          </span>
+          <span style={{ ...S.pill(FCOL[m.family] ?? T.textDim), flexShrink:0, fontSize:'9px' }}>
+            {(m.family||'?').replace('_',' ').slice(0,10)}
+          </span>
+          <span style={S.smiles}>{m.smiles || '—'}</span>
+          <span style={{ color:T.green, fontWeight:700, fontSize:'13px',
+                         textShadow:glow(T.green,3), flexShrink:0, fontVariantNumeric:'tabular-nums' }}>
+            {m.proxy_score?.toFixed(4)}
+          </span>
+          <span style={{ ...S.pill(m.source === 'mutant' ? T.purple : T.cyan),
+                          fontSize:'9px', flexShrink:0 }}>
+            {m.source === 'mutant' ? 'MUTANT' : 'SOBOL'}
+          </span>
+        </div>
+      ))}
+    </Panel>
+  )
+}
+
 function PulsePanel({ pulse }) {
   if (!pulse) return null
   const { sobol_index = 0, total_evaluated = 0, top_proxy_score = 0, family_counts = {}, recent = [] } = pulse
@@ -1389,6 +1506,7 @@ export default function App() {
   const [pub,  setPub]  = useState(null)
   const [priv, setPriv] = useState(null)
   const [feed, setFeed] = useState([])
+  const [pulse, setPulse] = useState(null)
   const [tick, setTick] = useState(null)
   const [local, setLocal] = useState(false)
 
@@ -1418,6 +1536,19 @@ export default function App() {
     }
     pollFeed()
     const id = setInterval(pollFeed, 10000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Pulse poll — every 5s
+  useEffect(() => {
+    async function pollPulse() {
+      try {
+        const r = await fetch('/pulse?' + Date.now())
+        if (r.ok) setPulse(await r.json())
+      } catch {}
+    }
+    pollPulse()
+    const id = setInterval(pollPulse, 5000)
     return () => clearInterval(id)
   }, [])
 
@@ -1482,6 +1613,13 @@ export default function App() {
 
             <ScoringHistoryPanel history={scoring} />
             <NetworkPanel        network={network} />
+
+            {/* LIFE PULSE — always visible (public endpoint) */}
+            <div style={S.sectionLabel}>
+              <div style={S.sectionTick} />
+              PUBLIC // LIFE PULSE — SOBOL MOLECULAR SWEEP
+            </div>
+            <LifePulsePanel pulse={pulse} />
 
             {/* Private */}
             {local && (
