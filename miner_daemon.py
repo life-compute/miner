@@ -41,7 +41,7 @@ except Exception as _e:
 def _env(key, default=""):
     return os.environ.get(key, default)
 
-PROGRAM_ID    = _env("PROGRAM_ID",    "DzcQHhTPuiqxCxZurDbEAaV1U2JBFXWy6JG1LE6WsKvJ")
+PROGRAM_ID    = _env("PROGRAM_ID",    "74RHjg1zYgN9zuVykde4SK2ERiRgNkouATW9MmQDLRWf")
 SOLANA_RPC    = _env("SOLANA_RPC",    "https://api.devnet.solana.com")
 AUTH_KEYPAIR  = _env("SOLANA_KEYPAIR","/mnt/minos-drive/life-compute-miner/dev-keypair.json")
 MINER_KEYPAIR = _env("MINER_KEYPAIR", "/mnt/minos-drive/life-compute-miner/miner-keypair.json")
