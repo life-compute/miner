@@ -392,7 +392,26 @@ def main():
     }
     write_stats(stats)
 
-    TARGET_ID_MAP = {"TP53": 0}
+    # On-chain target ID map — index matches the on-chain TargetAccount target_id field.
+    # Targets 0-9 are registered on devnet (MAX_TARGETS=10).
+    # Targets 10-29 are in targets.json but pending on-chain registration (MAX_TARGETS
+    # must be raised to ≥30 and register_target called for each before hits can be
+    # submitted).  All 30 are screened every cycle; submission is gated at line ~477.
+    TARGET_ID_MAP = {
+        "TP53":   0, "BRCA1":  1, "EGFR":   2, "HER2":   3, "KRAS":   4,
+        "BCL2":   5, "CDK4":   6, "VEGFR2": 7, "PDL1":   8, "MDM2":   9,
+        # ── pending on-chain registration (MAX_TARGETS ≥ 30 required) ──────────
+        "BRAF":  10, "PTEN":  11, "MYC":   12, "STAT3": 13, "PIK3CA": 14,
+        "MTOR":  15, "FGFR1": 16, "RET":   17, "AR":    18, "NTRK1":  19,
+        "IDH1":  20, "FLT3":  21, "SMAD4": 22, "APC":   23, "PARP1":  24,
+        "JAK2":  25, "ESR1":  26, "HDAC1": 27, "HDAC2": 28, "ABL1":   29,
+    }
+
+    # Round-robin index — rotates through all fetched targets regardless of
+    # on-chain registration.  Submission is still gated by TARGET_ID_MAP below.
+    # To switch to random: replace the two lines below with
+    #   target = random.choice(targets or [{}])
+    target_idx = 0
 
     while True:
         now = time.time()
@@ -415,8 +434,9 @@ def main():
                 log.info(f"  {t['id']:8s} {uid}  {flag}")
             last_refresh = now
 
-        eligible = [t for t in targets if t["id"] in TARGET_ID_MAP] or targets
-        target = random.choice(eligible)
+        # Round-robin over all fetched targets; submission eligibility is separate
+        target = targets[target_idx % len(targets)]
+        target_idx += 1
         tid    = target["id"]
         thresh = target.get("target_score_threshold", -7.0)
         uid    = target["uniprot_id"]
