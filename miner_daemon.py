@@ -121,8 +121,17 @@ def _pick_molecule(target: dict, sub_memory, best_smiles: list[str]) -> tuple[st
 # ── Solana RPC helpers ────────────────────────────────────────────────────────
 _DISC_TARGET = bytes([140, 246, 247, 200, 198, 220,  24, 250])
 _DISC_MINER  = bytes([232, 196,  79, 139, 222, 213, 161,  99])
+# ResultSubmission discriminator: sha256("account:ResultSubmission")[:8]
+_DISC_RESULT = bytes([0xd6, 0x73, 0xa5, 0x67, 0x43, 0xd3, 0x2f, 0x58])
 _NETWORK_STATS_CACHE: dict = {}
 _NETWORK_STATS_TTL   = 120
+
+# NetworkConfig PDA — seeds: [b"network_config"], program DzcQHhTP…
+# Derived once at module load; change if PROGRAM_ID changes.
+_NETWORK_CONFIG_PDA = "3cp9veeRTsqnXWSJYw2jqhRVeeKcaEkp4Pb2md9GJXPi"
+
+# Slots per 24 h (400 ms/slot × 216 000 = 86 400 s).
+_SLOTS_PER_DAY = 216_000
 
 _B58_ALPHA = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 def _b58enc(data: bytes) -> str:
@@ -166,18 +175,112 @@ def _get_accounts(disc: bytes) -> list[bytes]:
             pass
     return out
 
+def _get_network_config_miners_registered() -> int | None:
+    """Read total_miners_registered from the NetworkConfig PDA.
+
+    This is the authoritative on-chain counter incremented by register_miner.
+    It never decreases and is unaffected by test/ghost MinerAccount PDAs
+    created outside of the program's register_miner instruction.
+
+    NetworkConfig byte layout (Anchor-serialised):
+      0–7   discriminator
+      8–39  authority Pubkey
+      40–71 life_mint Pubkey
+      72–79 supply_cap u64
+      80–87 total_minted u64
+      88–95 current_epoch u64
+      96–103 epoch_start_slot i64
+      104–111 epoch_duration_slots u64
+      112   validators_required u8
+      113–116 validation_tolerance f32
+      117–276 validators [Pubkey; 5]  (5 × 32 = 160 bytes)
+      277   validator_count u8
+      278   bump u8
+      279   mint_authority_bump u8
+      280–287 total_miners_registered u64   ← we read this
+      288–295 total_validators_registered u64
+    """
+    import base64 as _b64, struct as _struct
+    try:
+        res = _rpc("getAccountInfo", [_NETWORK_CONFIG_PDA, {"encoding": "base64"}])
+        if not isinstance(res, dict) or res.get("value") is None:
+            log.debug("[NETWORK] NetworkConfig PDA not found")
+            return None
+        raw = _b64.b64decode(res["value"]["data"][0])
+        if len(raw) < 288:
+            log.debug(f"[NETWORK] NetworkConfig too short: {len(raw)} bytes")
+            return None
+        return _struct.unpack_from("<Q", raw, 280)[0]
+    except Exception as e:
+        log.debug(f"[NETWORK] _get_network_config_miners_registered failed: {e}")
+        return None
+
+def _count_active_miners() -> int | None:
+    """Count distinct miners who submitted a result in the last 24 h.
+
+    Reads ResultSubmission PDAs and filters by submitted_slot >= current_slot - 216_000.
+    Returns the count of unique miner pubkeys, or None on RPC failure.
+
+    ResultSubmission byte layout (Anchor-serialised):
+      0–7    discriminator
+      8–39   miner Pubkey
+      40     target_id u8
+      41–48  epoch u64
+      49–560 smiles [u8; 512]
+      561–562 smiles_len u16
+      563–566 claimed_affinity f32
+      567–574 submitted_slot i64   ← we filter on this
+    """
+    import base64 as _b64, struct as _struct
+    try:
+        current_slot = _rpc("getSlot", [])
+        if not isinstance(current_slot, int):
+            return None
+        cutoff_slot = current_slot - _SLOTS_PER_DAY
+        result_accounts = _get_accounts(_DISC_RESULT)
+        active: set[bytes] = set()
+        for raw in result_accounts:
+            if len(raw) < 575:
+                continue
+            submitted_slot = _struct.unpack_from("<q", raw, 567)[0]
+            if submitted_slot >= cutoff_slot:
+                active.add(raw[8:40])   # miner pubkey bytes
+        return len(active)
+    except Exception as e:
+        log.debug(f"[NETWORK] _count_active_miners failed: {e}")
+        return None
+
 def fetch_network_stats() -> dict:
+    """Return global network stats for the dashboard.
+
+    total_miners is sourced from total_miners_registered in the NetworkConfig PDA —
+    the authoritative on-chain counter incremented by register_miner.  This avoids
+    counting test/ghost MinerAccount PDAs created during development.
+
+    molecules_screened and targets_solved are still aggregated from individual
+    on-chain accounts.
+    """
     global _NETWORK_STATS_CACHE
     if _NETWORK_STATS_CACHE.get("_ts", 0) + _NETWORK_STATS_TTL > time.time():
         return _NETWORK_STATS_CACHE
     result: dict = {"total_miners": None, "molecules_screened": None, "targets_solved": None}
     try:
+        # ── Miner count: read from NetworkConfig, not from PDA enumeration ──
+        registered = _get_network_config_miners_registered()
+        if registered is not None:
+            result["total_miners"] = registered
+        else:
+            # Fallback: count active submitters from the last 24 h
+            result["total_miners"] = _count_active_miners()
+
+        # ── molecules_screened: sum from MinerAccount PDAs ──
         miner_accounts = _get_accounts(_DISC_MINER)
-        result["total_miners"] = len(miner_accounts)
         result["molecules_screened"] = sum(
             int.from_bytes(raw[48:56], "little")
             for raw in miner_accounts if len(raw) >= 56
         )
+
+        # ── targets_solved: sum from TargetAccount PDAs ──
         target_accounts = _get_accounts(_DISC_TARGET)
         result["targets_solved"] = sum(
             int.from_bytes(raw[65:73], "little")
