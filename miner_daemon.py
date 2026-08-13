@@ -485,6 +485,23 @@ def main():
                  f"({'✔ HIT' if hit else '✘ miss'})  thresh={eff_thresh:.3f}  {elapsed:.1f}s  "
                  f"msa={result.get('msa_used', '?')}")
 
+        # ── Append to live scoring feed JSONL ────────────────────────────────
+        _boltz_jsonl = WORK_DIR / "output" / "life_boltz_scores.jsonl"
+        try:
+            _boltz_jsonl.parent.mkdir(exist_ok=True)
+            with _boltz_jsonl.open("a") as _fh:
+                _fh.write(json.dumps({
+                    "ts":          time.time(),
+                    "target_id":   tid,
+                    "smiles":      mol,
+                    "boltz_score": boltz_score,
+                    "affinity":    affinity,
+                    "hit":         hit,
+                    "source":      source,
+                }) + "\n")
+        except Exception as _je:
+            log.debug(f"JSONL write failed: {_je}")
+
         # Track best molecules for generative seeding; record in diversity memory
         if boltz_score is not None:
             best_boltz_smiles.append(mol)

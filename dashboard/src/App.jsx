@@ -471,7 +471,85 @@ function MinerStatusPanel({ alive, currentTarget, minerId, lastUpdated }) {
   )
 }
 
-/* ─── Current molecule panel ────────────────────────────────── */
+/* ─── Live scoring feed panel ───────────────────────────────── */
+function LiveScoringFeedPanel({ feed }) {
+  const rows = feed ?? []
+  const srcColor = (s) =>
+    s === 'ref'       ? T.purple :
+    s === 'generated' ? T.cyan :
+    T.greenDim
+
+  return (
+    <Panel accent={T.cyan} style={{ gridColumn: 'span 2' }}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(T.cyan)}>⬡</span>
+        <span>LIVE SCORING FEED</span>
+        <span style={{ marginLeft: 'auto', ...S.pill(T.cyan) }}>LIVE · 10s</span>
+      </div>
+
+      {/* header */}
+      <div style={{ display: 'grid',
+                    gridTemplateColumns: '70px 60px 1fr 72px 72px 42px 52px',
+                    gap: '8px', padding: '4px 0 6px',
+                    borderBottom: `1px solid ${T.border}`,
+                    fontSize: '9px', color: T.textDim, letterSpacing: '0.14em' }}>
+        <span>TIME</span><span>TARGET</span><span>SMILES</span>
+        <span style={{ textAlign:'right' }}>BOLTZ</span>
+        <span style={{ textAlign:'right' }}>AFF(kcal)</span>
+        <span style={{ textAlign:'center' }}>HIT?</span>
+        <span style={{ textAlign:'center' }}>SOURCE</span>
+      </div>
+
+      {rows.length === 0 ? (
+        <div style={{ color: T.textDim, fontSize: '11px', padding: '16px 0' }}>
+          AWAITING FIRST BOLTZ2 EVALUATION…
+          <span style={{ animation: 'blink 1s step-end infinite', color: T.green }}> █</span>
+        </div>
+      ) : rows.map((r, i) => (
+        <div key={i} style={{
+          display:             'grid',
+          gridTemplateColumns: '70px 60px 1fr 72px 72px 42px 52px',
+          gap:                 '8px',
+          padding:             '6px 0',
+          borderBottom:        `1px solid #0a150a`,
+          fontSize:            '11px',
+          alignItems:          'center',
+          background:          i === 0 ? '#00ff4106' : 'transparent',
+        }}>
+          <span style={{ color: T.textDim, fontSize: '10px', fontVariantNumeric: 'tabular-nums' }}>
+            {r.ts ? r.ts.slice(11, 19) : '—'}
+          </span>
+          <span style={{ color: T.cyan, fontWeight: 700, textShadow: glow(T.cyan, 2) }}>
+            {r.target_id}
+          </span>
+          <span style={{ color: T.green, overflow: 'hidden', textOverflow: 'ellipsis',
+                         whiteSpace: 'nowrap', fontSize: '10px', fontFamily: T.mono }}>
+            {r.smiles || '—'}
+          </span>
+          <span style={{ color: r.boltz_score != null ? T.cyan : T.textDim,
+                         textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                         textShadow: r.boltz_score != null ? glow(T.cyan, 2) : 'none' }}>
+            {r.boltz_score != null ? r.boltz_score.toFixed(4) : '—'}
+          </span>
+          <span style={{ color: T.text, textAlign: 'right',
+                         fontVariantNumeric: 'tabular-nums', fontSize: '10px' }}>
+            {r.affinity != null ? r.affinity.toFixed(3) : '—'}
+          </span>
+          <span style={{ textAlign: 'center' }}>
+            <span style={S.pill(r.hit ? T.green : T.red)}>{r.hit ? 'HIT' : 'MISS'}</span>
+          </span>
+          <span style={{ textAlign: 'center' }}>
+            <span style={{ ...S.pill(srcColor(r.source)), fontSize: '9px' }}>
+              {(r.source || '?').slice(0, 7)}
+            </span>
+          </span>
+        </div>
+      ))}
+    </Panel>
+  )
+}
+
+/* ─── Current molecule panel (kept for private priv.generated feed) ─ */
 function CurrentMoleculePanel({ pub, priv }) {
   const history = pub?.scoring_history ?? []
   // history is sorted oldest→newest; last element is the most recent bucket
@@ -660,8 +738,8 @@ function ScoringHistoryPanel({ history }) {
     <Panel accent={T.green}>
       <div style={S.panelTitle}>
         <span style={S.titleAccent(T.green)}>▲</span>
-        <span>SCORING HISTORY</span>
-        <span style={{ marginLeft: 'auto', color: T.textDim, fontSize: '10px' }}>{scores.length} pts</span>
+        <span>SCORING HISTORY — LAST 2H</span>
+        <span style={{ marginLeft: 'auto', color: T.textDim, fontSize: '10px' }}>5m buckets · {scores.length} pts</span>
       </div>
 
       <div style={{ display: 'flex', gap: '28px', marginBottom: '14px' }}>
@@ -955,9 +1033,11 @@ const CSS = `
 export default function App() {
   const [pub,  setPub]  = useState(null)
   const [priv, setPriv] = useState(null)
+  const [feed, setFeed] = useState([])
   const [tick, setTick] = useState(null)
   const [local, setLocal] = useState(false)
 
+  // Stats poll — every 5s
   useEffect(() => {
     async function poll() {
       try { const r = await fetch('/stats?' + Date.now()); if (r.ok) setPub(await r.json()) } catch {}
@@ -970,6 +1050,19 @@ export default function App() {
     }
     poll()
     const id = setInterval(poll, 5000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Feed poll — every 10s (independent; faster than full stats)
+  useEffect(() => {
+    async function pollFeed() {
+      try {
+        const r = await fetch('/feed?' + Date.now())
+        if (r.ok) { const d = await r.json(); setFeed(d.rows ?? []) }
+      } catch {}
+    }
+    pollFeed()
+    const id = setInterval(pollFeed, 10000)
     return () => clearInterval(id)
   }, [])
 
@@ -1025,7 +1118,7 @@ export default function App() {
             <MoleculesPanel   count={mols} />
             <LifeEarnedPanel  earned={life} />
             <TargetsPanel     targets={tgts} />
-            <CurrentMoleculePanel pub={pub} priv={priv} />
+            <LiveScoringFeedPanel feed={feed} />
 
             <div style={S.sectionLabel}>
               <div style={S.sectionTick} />

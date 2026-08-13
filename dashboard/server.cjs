@@ -127,30 +127,24 @@ function buildPublicStats() {
   // Bucket size is adaptive: target ~20–30 data points across the full data span.
   // With only the last 200 rows (5-min buckets) the chart showed repeated 0.0097
   // because the best-ever rows (from 3 days ago) fell outside the window.
-  const validRows = boltzRows.filter(r => typeof r.boltz_score === 'number' && r.ts > 0);
-  let EPOCH_WINDOW = 300; // default: 5-min buckets
-  if (validRows.length >= 2) {
-    const ts0 = Math.min(...validRows.map(r => r.ts));
-    const ts1 = Math.max(...validRows.map(r => r.ts));
-    const spanSec = ts1 - ts0;
-    // Choose bucket size so we get ~24 buckets across the full span
-    const TARGET_BUCKETS = 24;
-    const rawBucket = spanSec / TARGET_BUCKETS;
-    // Round up to nearest sensible interval (5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 24h)
-    const INTERVALS = [300, 900, 1800, 3600, 7200, 14400, 21600, 43200, 86400];
-    EPOCH_WINDOW = INTERVALS.find(i => i >= rawBucket) || INTERVALS[INTERVALS.length - 1];
-  }
+  // Scoring history: best boltz score per 5-minute bucket, last 2 hours only.
+  // Fixed window ensures recent scores appear immediately (no adaptive stretch).
+  const TWO_HOURS_S = 2 * 3600;
+  const FIVE_MIN_S  = 300;
+  const now_s       = Date.now() / 1000;
+  const cutoff_s    = now_s - TWO_HOURS_S;
+
+  const validRows = boltzRows.filter(r => typeof r.boltz_score === 'number' && r.ts > cutoff_s);
 
   const epochBuckets = {};
   for (const r of validRows) {
-    const ts    = r.ts;
-    const epoch = Math.floor(ts / EPOCH_WINDOW);
+    const epoch = Math.floor(r.ts / FIVE_MIN_S);
     if (!epochBuckets[epoch] || r.boltz_score > epochBuckets[epoch].best_score) {
       epochBuckets[epoch] = {
         epoch,
         best_score: Math.round(r.boltz_score * 10000) / 10000,
         target_id:  r.target_id || '?',
-        ts_iso:     new Date(ts * 1000).toISOString(),
+        ts_iso:     new Date(r.ts * 1000).toISOString(),
       };
     }
   }
@@ -274,6 +268,33 @@ function buildAdaptive() {
 http.createServer((req, res) => {
   const url    = req.url.split('?')[0];
   const local  = isLocalhost(req);
+
+  /* /feed — public: last 20 raw boltz scores, newest first */
+  if (url === '/feed') {
+    try {
+      const rows = tailJsonl(path.join(OUT, 'life_boltz_scores.jsonl'), 20)
+        .reverse()  // newest first
+        .map(r => ({
+          ts:          r.ts ? new Date(r.ts * 1000).toISOString() : null,
+          target_id:   r.target_id   || '?',
+          smiles:      (r.smiles     || '').slice(0, 30),
+          boltz_score: typeof r.boltz_score === 'number'
+                         ? Math.round(r.boltz_score * 10000) / 10000
+                         : null,
+          affinity:    typeof r.affinity === 'number'
+                         ? Math.round(r.affinity * 1000) / 1000
+                         : null,
+          hit:         r.hit ?? false,
+          source:      r.source || 'unknown',
+        }));
+      res.writeHead(200, {
+        'Content-Type':                'application/json',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(JSON.stringify({ rows, ts: Date.now() }));
+    } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: String(e) })); }
+    return;
+  }
 
   /* /stats — public */
   if (url === '/stats') {
