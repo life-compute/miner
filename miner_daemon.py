@@ -80,7 +80,7 @@ BOLTZ_SEED = 68   # Boltz2 random seed — included in submission so validator u
 # Compare score distribution vs adaptive stack to quantify whether it helps.
 # Ref compound screening is always active regardless of this flag.
 # Flip back to True to restore adaptive behaviour.
-ADAPTIVE_ENABLED = False
+ADAPTIVE_ENABLED = True
 
 ZINC15_FRAGMENTS = Path(__file__).parent / "data" / "zinc15_fragments.smi"
 _zinc_cache: list[str] = []
