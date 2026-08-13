@@ -1204,10 +1204,134 @@ function MsgSegment({ seg }) {
   )
 }
 
+/** Save-to-adaptive button with state machine. */
+function SaveFileButton({ filename, code }) {
+  const [status, setStatus] = useState('idle') // idle | saving | saved | error
+  const [errMsg, setErrMsg] = useState('')
+
+  async function save() {
+    if (status === 'saving') return
+    setStatus('saving')
+    try {
+      const res = await fetch('/agent/write-file', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ filename, content: code }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`)
+      setStatus('saved')
+    } catch (e) {
+      setErrMsg(e.message)
+      setStatus('error')
+    }
+  }
+
+  const btnColor = status === 'saved'  ? T.green
+                 : status === 'error'  ? T.red
+                 : status === 'saving' ? T.textDim
+                 : T.cyan
+  const label    = status === 'saved'  ? `✓ Saved to adaptive/${filename}`
+                 : status === 'error'  ? `✗ Error: ${errMsg}`
+                 : status === 'saving' ? 'SAVING…'
+                 : `SAVE TO ADAPTIVE/${filename}`
+
+  return (
+    <div style={{ marginTop: '4px' }}>
+      <button
+        onClick={save}
+        disabled={status === 'saving' || status === 'saved'}
+        style={{
+          background:   status === 'saved' ? btnColor + '18' : '#000a0a',
+          border:       `1px solid ${btnColor}66`,
+          color:        btnColor,
+          fontFamily:   T.mono,
+          fontSize:     '10px',
+          letterSpacing:'0.1em',
+          padding:      '5px 14px',
+          cursor:       status === 'saving' || status === 'saved' ? 'default' : 'pointer',
+          borderRadius: '2px',
+          textShadow:   status === 'idle' || status === 'error' ? `0 0 6px ${btnColor}` : 'none',
+          transition:   'all 0.2s',
+        }}
+      >
+        {label}
+      </button>
+      {status === 'saved' && <RestartMinerButton />}
+    </div>
+  )
+}
+
+/** Restart-miner button, shown after a successful save. */
+function RestartMinerButton() {
+  const [status, setStatus] = useState('idle') // idle | restarting | done | error
+  const [errMsg, setErrMsg] = useState('')
+
+  async function restart() {
+    if (status === 'restarting') return
+    setStatus('restarting')
+    try {
+      const res = await fetch('/agent/restart-miner', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`)
+      setStatus('done')
+    } catch (e) {
+      setErrMsg(e.message)
+      setStatus('error')
+    }
+  }
+
+  const btnColor = status === 'done'       ? T.green
+                 : status === 'error'      ? T.red
+                 : status === 'restarting' ? T.textDim
+                 : T.purple
+  const label    = status === 'done'       ? '✓ MINER RESTARTED'
+                 : status === 'error'      ? `✗ ${errMsg}`
+                 : status === 'restarting' ? 'RESTARTING…'
+                 : '↺ RESTART MINER'
+
+  return (
+    <button
+      onClick={restart}
+      disabled={status === 'restarting' || status === 'done'}
+      style={{
+        marginLeft:   '8px',
+        background:   '#0a000a',
+        border:       `1px solid ${btnColor}66`,
+        color:        btnColor,
+        fontFamily:   T.mono,
+        fontSize:     '10px',
+        letterSpacing:'0.1em',
+        padding:      '5px 14px',
+        cursor:       status === 'restarting' || status === 'done' ? 'default' : 'pointer',
+        borderRadius: '2px',
+        textShadow:   status === 'idle' ? `0 0 6px ${btnColor}` : 'none',
+        transition:   'all 0.2s',
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
 /** Single chat bubble. */
 function ChatBubble({ role, content }) {
   const isUser = role === 'user'
-  const segs   = parseContent(content)
+
+  // For assistant messages: detect SAVE_FILE: filename.py marker and strip it from display
+  const saveFileMatch = !isUser && content.match(/SAVE_FILE:\s*(\S+\.py)\s*$/m)
+  const saveFilename  = saveFileMatch ? saveFileMatch[1] : null
+  const displayContent = saveFilename
+    ? content.replace(/\nSAVE_FILE:\s*\S+\.py\s*$/, '').replace(/SAVE_FILE:\s*\S+\.py\s*$/, '')
+    : content
+
+  const segs = parseContent(displayContent)
+
+  // Find the last Python code block (to attach the save button to)
+  const lastPyIdx = saveFilename
+    ? segs.reduce((acc, s, i) => (s.type === 'code' && (s.lang === 'python' || s.lang === 'py') ? i : acc), -1)
+    : -1
+
   return (
     <div style={{
       display:       'flex',
@@ -1244,7 +1368,21 @@ function ChatBubble({ role, content }) {
         color:         T.text,
         maxWidth:      '90%',
       }}>
-        {segs.map((seg, i) => <MsgSegment key={i} seg={seg} />)}
+        {segs.map((seg, i) => (
+          <div key={i}>
+            <MsgSegment seg={seg} />
+            {saveFilename && i === lastPyIdx && (
+              <SaveFileButton filename={saveFilename} code={seg.content} />
+            )}
+          </div>
+        ))}
+        {/* Fallback: SAVE_FILE declared but no python block found — button at bottom */}
+        {saveFilename && lastPyIdx === -1 && (
+          <SaveFileButton
+            filename={saveFilename}
+            code={segs.filter(s => s.type === 'code').map(s => s.content).join('\n')}
+          />
+        )}
       </div>
     </div>
   )

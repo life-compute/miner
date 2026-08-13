@@ -15,12 +15,14 @@ const http  = require('http');
 const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
+const { exec } = require('child_process');
 
-const PORT    = parseInt(process.env.DASHBOARD_PORT || '3001');
-const DIST    = path.join(__dirname, 'dist');
-const ROOT    = path.join(__dirname, '..');
-const STATS   = path.join(ROOT, 'stats.json');
-const OUT     = path.join(ROOT, 'output');
+const PORT         = parseInt(process.env.DASHBOARD_PORT || '3001');
+const DIST         = path.join(__dirname, 'dist');
+const ROOT         = path.join(__dirname, '..');
+const STATS        = path.join(ROOT, 'stats.json');
+const OUT          = path.join(ROOT, 'output');
+const ADAPTIVE_DIR = path.join(ROOT, 'adaptive');
 
 /* ── .env fallback loader (PM2 env_file handles prod; this covers direct runs) */
 (function loadDotEnv() {
@@ -369,6 +371,8 @@ Your specialties:
 
 The adaptive/ directory is where miners build their custom search stack. life_generate.py, life_chembl.py and life_diversity.py are provided as starting tools. Help miners build life_pulse.py, life_art.py and life_scout.py themselves for competitive advantage.
 
+You can save Python files directly to the miner's adaptive/ directory. When you write a complete Python file, end your response with: SAVE_FILE: filename.py — this will show a save button to the miner.
+
 Current network stats: ${statsStr}`;
 }
 
@@ -569,6 +573,86 @@ http.createServer(async (req, res) => {
     return;
   }
 
+  /* /agent/write-file — POST: write a .py file into adaptive/ */
+  if (url === '/agent/write-file') {
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: 'Method Not Allowed — use POST' }));
+      return;
+    }
+    const apiKey = (process.env.ANTHROPIC_API_KEY || '').trim();
+    if (!apiKey) {
+      res.writeHead(403, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured in .env' }));
+      return;
+    }
+    try {
+      const body = await readBody(req);
+      const { filename, content } = body;
+
+      // Validate filename: must end in .py, no path separators
+      if (typeof filename !== 'string' || !filename.endsWith('.py') ||
+          filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+        res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({ error: 'filename must be a plain .py filename (no path separators)' }));
+        return;
+      }
+      if (typeof content !== 'string') {
+        res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({ error: 'content (string) required' }));
+        return;
+      }
+
+      // Resolve and verify the target path stays within ADAPTIVE_DIR
+      const fullPath = path.resolve(ADAPTIVE_DIR, filename);
+      if (!fullPath.startsWith(ADAPTIVE_DIR + path.sep) && fullPath !== ADAPTIVE_DIR) {
+        res.writeHead(403, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({ error: 'Path outside adaptive/ is not allowed' }));
+        return;
+      }
+
+      // Ensure adaptive/ exists
+      fs.mkdirSync(ADAPTIVE_DIR, { recursive: true });
+      fs.writeFileSync(fullPath, content, 'utf8');
+
+      console.log(`[LIFE AGENT] wrote ${fullPath} (${content.length} bytes)`);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ success: true, path: fullPath }));
+    } catch (e) {
+      console.error('[LIFE AGENT] write-file error:', e.message);
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  /* /agent/restart-miner — POST: restart the life-miner PM2 process */
+  if (url === '/agent/restart-miner') {
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: 'Method Not Allowed — use POST' }));
+      return;
+    }
+    const apiKey = (process.env.ANTHROPIC_API_KEY || '').trim();
+    if (!apiKey) {
+      res.writeHead(403, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured in .env' }));
+      return;
+    }
+    exec('pm2 restart life-miner', { timeout: 15000 }, (err, stdout, stderr) => {
+      if (err) {
+        console.error('[LIFE AGENT] restart-miner error:', err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({ error: err.message, stderr }));
+        return;
+      }
+      console.log('[LIFE AGENT] pm2 restart life-miner →', stdout.trim());
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ success: true, stdout: stdout.trim() }));
+    });
+    return;
+  }
+
   /* ── Static files from dist/ ─────────────────────────────────── */
   let filePath = path.join(DIST, url === '/' ? 'index.html' : url);
   if (!fs.existsSync(filePath)) filePath = path.join(DIST, 'index.html');
@@ -586,4 +670,6 @@ http.createServer(async (req, res) => {
   console.log(`Private diagnostics   → http://localhost:${PORT}/private/stats  (localhost only)`);
   console.log(`LIFE AGENT status     → http://localhost:${PORT}/agent/status`);
   console.log(`LIFE AGENT chat       → http://localhost:${PORT}/agent/chat  (POST)`);
+  console.log(`LIFE AGENT write-file → http://localhost:${PORT}/agent/write-file  (POST)`);
+  console.log(`LIFE AGENT restart    → http://localhost:${PORT}/agent/restart-miner  (POST)`);
 });
