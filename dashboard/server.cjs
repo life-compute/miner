@@ -118,28 +118,47 @@ function isMinerAlive(s) {
 /* ── /stats — PUBLIC data ────────────────────────────────────────── */
 function buildPublicStats() {
   const s         = readJson(STATS) || {};
-  const boltzRows = tailJsonl(path.join(OUT, 'life_boltz_scores.jsonl'), 200);
+  // Read ALL boltz rows so early high scores (e.g. 0.0174 from day 1) are included.
+  // tailJsonl(200) was silently dropping the best historical scores.
+  const boltzRows = tailJsonl(path.join(OUT, 'life_boltz_scores.jsonl'), 100000);
   const g         = s.global || {};
 
-  // Scoring history: best boltz score per 5-min epoch bucket (TARGET_REFRESH = 300s)
-  const EPOCH_WINDOW = 300;
+  // Scoring history: best boltz score per time bucket.
+  // Bucket size is adaptive: target ~20–30 data points across the full data span.
+  // With only the last 200 rows (5-min buckets) the chart showed repeated 0.0097
+  // because the best-ever rows (from 3 days ago) fell outside the window.
+  const validRows = boltzRows.filter(r => typeof r.boltz_score === 'number' && r.ts > 0);
+  let EPOCH_WINDOW = 300; // default: 5-min buckets
+  if (validRows.length >= 2) {
+    const ts0 = Math.min(...validRows.map(r => r.ts));
+    const ts1 = Math.max(...validRows.map(r => r.ts));
+    const spanSec = ts1 - ts0;
+    // Choose bucket size so we get ~24 buckets across the full span
+    const TARGET_BUCKETS = 24;
+    const rawBucket = spanSec / TARGET_BUCKETS;
+    // Round up to nearest sensible interval (5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 24h)
+    const INTERVALS = [300, 900, 1800, 3600, 7200, 14400, 21600, 43200, 86400];
+    EPOCH_WINDOW = INTERVALS.find(i => i >= rawBucket) || INTERVALS[INTERVALS.length - 1];
+  }
+
   const epochBuckets = {};
-  for (const r of boltzRows) {
-    if (typeof r.boltz_score !== 'number') continue;
-    const ts    = r.ts || 0;
+  for (const r of validRows) {
+    const ts    = r.ts;
     const epoch = Math.floor(ts / EPOCH_WINDOW);
     if (!epochBuckets[epoch] || r.boltz_score > epochBuckets[epoch].best_score) {
       epochBuckets[epoch] = {
         epoch,
         best_score: Math.round(r.boltz_score * 10000) / 10000,
         target_id:  r.target_id || '?',
-        ts_iso:     ts ? new Date(ts * 1000).toISOString() : null,
+        ts_iso:     new Date(ts * 1000).toISOString(),
       };
     }
   }
+  // Sort ascending (oldest→newest) so the chart renders left-to-right.
+  // Cap at 30 buckets. history[history.length-1] is the most recent.
   const scoringHistory = Object.values(epochBuckets)
     .sort((a, b) => a.epoch - b.epoch)
-    .slice(-20);
+    .slice(-30);
 
   // Network stats — pass through real on-chain values; null means "—" in UI.
   // Never substitute mock numbers.

@@ -474,7 +474,8 @@ function MinerStatusPanel({ alive, currentTarget, minerId, lastUpdated }) {
 /* ─── Current molecule panel ────────────────────────────────── */
 function CurrentMoleculePanel({ pub, priv }) {
   const history = pub?.scoring_history ?? []
-  const latest  = history[0]
+  // history is sorted oldest→newest; last element is the most recent bucket
+  const latest  = history.length ? history[history.length - 1] : null
   const generated = priv?.generated ?? []
   const recent  = generated.slice(0, 5)
   return (
@@ -681,7 +682,7 @@ function ScoringHistoryPanel({ history }) {
 
       {history.length > 0 && (
         <div style={{ marginTop: '12px', maxHeight: '140px', overflowY: 'auto' }}>
-          {history.slice(0, 8).map((r, i) => (
+          {history.slice().reverse().slice(0, 8).map((r, i) => (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: '80px 1fr 60px',
                                    gap: '8px', padding: '5px 0', borderBottom: `1px solid #0a150a`,
                                    fontSize: '10px', alignItems: 'center' }}>
