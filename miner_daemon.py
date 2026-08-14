@@ -272,15 +272,15 @@ def _count_active_miners() -> int | None:
     Reads ResultSubmission PDAs and filters by submitted_slot >= current_slot - 216_000.
     Returns the count of unique miner pubkeys, or None on RPC failure.
 
-    ResultSubmission byte layout (Anchor-serialised):
+    ResultSubmission byte layout (Anchor-serialised, target_id: u16):
       0–7    discriminator
       8–39   miner Pubkey
-      40     target_id u8
-      41–48  epoch u64
-      49–560 smiles [u8; 512]
-      561–562 smiles_len u16
-      563–566 claimed_affinity f32
-      567–574 submitted_slot i64   ← we filter on this
+      40–41  target_id u16 (2-byte LE)
+      42–49  epoch u64
+      50–561 smiles [u8; 512]
+      562–563 smiles_len u16
+      564–567 claimed_affinity f32
+      568–575 submitted_slot i64   ← we filter on this
     """
     import base64 as _b64, struct as _struct
     try:
@@ -291,9 +291,9 @@ def _count_active_miners() -> int | None:
         result_accounts = _get_accounts(_DISC_RESULT)
         active: set[bytes] = set()
         for raw in result_accounts:
-            if len(raw) < 575:
+            if len(raw) < 576:
                 continue
-            submitted_slot = _struct.unpack_from("<q", raw, 567)[0]
+            submitted_slot = _struct.unpack_from("<q", raw, 568)[0]
             if submitted_slot >= cutoff_slot:
                 active.add(raw[8:40])   # miner pubkey bytes
         return len(active)
@@ -900,7 +900,14 @@ def main():
             resp = submit_on_chain(TARGET_ID_MAP[tid], mol, affinity, boltz_seed=boltz_seed_used)
             if resp and resp.get("tx"):
                 tx_sig = resp["tx"]
-                life_earned += 1.0
+                # Tier-based reward tracking (mirrors Rust DifficultyTier::base_reward_raw):
+                #   tier 1 (easy)   =   1 LIFE
+                #   tier 2 (medium) =   5 LIFE
+                #   tier 3 (hard)   =  25 LIFE
+                #   unknown         =   1 LIFE (conservative fallback)
+                _tier = target.get("difficulty_tier", 1)
+                _tier_reward = {1: 1.0, 2: 5.0, 3: 25.0}.get(_tier, 1.0)
+                life_earned += _tier_reward
                 log.info(f"  ✔ tx: {tx_sig}")
                 log.info(f"  Explorer: https://explorer.solana.com/tx/{tx_sig}?cluster=devnet")
                 txs.append({"tx": tx_sig, "target": tid, "score": affinity,
