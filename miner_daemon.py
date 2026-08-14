@@ -734,6 +734,30 @@ def main():
                              "chembl_novel": chembl_result.get("is_novel"),
                              "chembl_sim":   chembl_result.get("similarity"),
                              "ts": datetime.now(timezone.utc).isoformat()})
+                # ── Update results database ───────────────────────────────────
+                try:
+                    import importlib.util as _ilu
+                    _upd_path = Path("/tmp/life-compute/targets/scripts/update_results_db.py")
+                    if _upd_path.exists():
+                        _spec = _ilu.spec_from_file_location("update_results_db", _upd_path)
+                        if _spec and _spec.loader:
+                            _upd = _ilu.module_from_spec(_spec)
+                            _spec.loader.exec_module(_upd)  # type: ignore[union-attr]
+                            _hit = _upd.add_hit(
+                                smiles=mol, score=float(affinity),
+                                target_id=tid, uniprot_id=uid,
+                                miner_wallet=AUTH_KEYPAIR,
+                                epoch=int(time.time() // 86400),
+                                tx=tx_sig, life_earned=int(life_earned * 1_000_000),
+                            )
+                            _upd.update_hits(_hit)
+                            _upd.rebuild_leaderboard()
+                            _upd.rebuild_daily_report()
+                            _upd.update_network_stats(_hit)
+                            _upd.git_push(_hit)
+                            log.info(f"  [RESULTS DB] updated and pushed")
+                except Exception as _re:
+                    log.debug(f"  [RESULTS DB] update failed (non-fatal): {_re}")
             elif resp and resp.get("status") == "already_submitted":
                 log.info("  Already submitted this epoch — waiting for next epoch")
             else:
