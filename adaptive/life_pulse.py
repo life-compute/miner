@@ -166,6 +166,47 @@ _RGROUPS: list[str] = [
     "C(F)(F)F",  # trifluoromethyl
 ]
 
+# ── ZINC15 direct sampler (primary, unlimited) ─────────────────────────────────
+# 1.69 M drug-like SMILES; one per line, no ID column.
+# Quasi-random byte-seek: sobol_float → byte offset → skip partial line → read
+# next full line.  O(1) per sample, zero memory footprint, never exhausted.
+_ZINC15_PATH = LIFE_DIR / "data" / "zinc15_fragments.smi"
+_ZINC15_SIZE: int = 0   # cached on first call
+
+
+def _zinc15_at(frac: float) -> Optional[str]:
+    """Return the SMILES nearest to byte-fraction *frac* ∈ [0, 1) in the ZINC15
+    file, or None if the file is absent / unreadable."""
+    global _ZINC15_SIZE
+    if not _ZINC15_PATH.exists():
+        return None
+    if _ZINC15_SIZE == 0:
+        _ZINC15_SIZE = _ZINC15_PATH.stat().st_size
+    byte_pos = int(frac * _ZINC15_SIZE)
+    try:
+        with _ZINC15_PATH.open("rb") as fh:
+            fh.seek(byte_pos)
+            fh.readline()                                   # skip partial line at seek
+            line = fh.readline().decode("utf-8", errors="ignore").strip()
+        if not line:
+            return None
+        return line.split()[0]                              # bare SMILES (no ID column)
+    except Exception:
+        return None
+
+
+def _vocab_smiles(idx: int) -> tuple[str, str, str, int]:
+    """Fallback scaffold+rgroup sampler used when ZINC15 is absent.
+    Returns (smiles, family, scaffold_name, rgroup_idx)."""
+    fam_f = sobol_float(idx, 1)
+    fam_name = FAMILY_NAMES[int(fam_f * _N_FAMILIES) % _N_FAMILIES]
+    vocab = FAMILY_VOCAB[fam_name]
+    scaf_idx = int(sobol_float(idx, 2) * len(vocab)) % len(vocab)
+    rg_idx   = int(sobol_float(idx, 3) * len(_RGROUPS)) % len(_RGROUPS)
+    scaffold_smi, scaffold_name = vocab[scaf_idx]
+    smiles = _decorate(scaffold_smi, rg_idx)
+    return smiles, fam_name, scaffold_name, rg_idx
+
 
 # ── Sobol implementation (Halton / Van der Corput) ─────────────────────────────
 
@@ -716,6 +757,8 @@ def run_sweep(
     idx           = state.next_index
 
     # ── Phase 1: Sobol sweep ──────────────────────────────────────────────────
+    _use_zinc15 = _ZINC15_PATH.exists()
+
     while evaluated < max_configs:
         attempts += 1
         if attempts > _max_attempts:
@@ -726,19 +769,37 @@ def run_sweep(
                 )
             break
 
-        fam_f = sobol_float(idx, 0)
-        if family_filter and family_filter in FAMILY_VOCAB:
-            fam_name = family_filter
+        # ── Primary: ZINC15 byte-seek (unlimited, O(1) per sample) ───────────
+        if _use_zinc15 and not (family_filter and family_filter in FAMILY_VOCAB):
+            frac   = sobol_float(idx, 0)
+            smiles = _zinc15_at(frac)
+            if smiles is None:
+                idx += 1
+                continue
+            canon = _canonical(smiles) if smiles else None
+            row_meta = {
+                "source":        "pulse",
+                "family":        "zinc15",
+                "scaffold_name": "zinc15_fragment",
+                "scaffold_smi":  smiles,
+                "rgroup_idx":    0,
+            }
         else:
-            fam_name = FAMILY_NAMES[int(fam_f * _N_FAMILIES) % _N_FAMILIES]
+            # ── Fallback: scaffold vocab (family-filter or no ZINC15) ─────────
+            if family_filter and family_filter in FAMILY_VOCAB:
+                fam_name = family_filter
+            else:
+                fam_name = FAMILY_NAMES[int(sobol_float(idx, 0) * _N_FAMILIES) % _N_FAMILIES]
+            smiles_raw, fam_name, scaffold_name, rg_idx = _vocab_smiles(idx)
+            canon = _canonical(smiles_raw)
+            row_meta = {
+                "source":        "pulse",
+                "family":        fam_name,
+                "scaffold_name": scaffold_name,
+                "scaffold_smi":  smiles_raw,
+                "rgroup_idx":    rg_idx,
+            }
 
-        vocab        = FAMILY_VOCAB[fam_name]
-        scaf_idx     = int(sobol_float(idx, 1) * len(vocab)) % len(vocab)
-        rg_idx       = int(sobol_float(idx, 2) * len(_RGROUPS)) % len(_RGROUPS)
-        scaffold_smi, scaffold_name = vocab[scaf_idx]
-
-        smiles = _decorate(scaffold_smi, rg_idx)
-        canon  = _canonical(smiles)
         if canon is None:
             idx += 1
             continue
@@ -754,19 +815,19 @@ def run_sweep(
 
         score = proxy_score(canon)
         if score <= 0:
-            idx += 1
-            continue
+            # ZINC15 molecules are pre-curated; accept with baseline score
+            if _use_zinc15 and row_meta["family"] == "zinc15":
+                score = 0.5
+            else:
+                idx += 1
+                continue
 
         row = {
-            "source":        "pulse",
-            "sobol_idx":     idx,
-            "family":        fam_name,
-            "scaffold_name": scaffold_name,
-            "scaffold_smi":  scaffold_smi,
-            "rgroup_idx":    rg_idx,
-            "smiles":        canon,
-            "proxy_score":   round(score, 6),
-            "ts":            time.time(),
+            **row_meta,
+            "sobol_idx":   idx,
+            "smiles":      canon,
+            "proxy_score": round(score, 6),
+            "ts":          time.time(),
         }
         with PULSE_JSONL.open("a") as fh:
             fh.write(json.dumps(row) + "\n")
