@@ -50,6 +50,18 @@ except Exception as _pe:
     _PULSE_AVAILABLE = False
     _pulse_err = str(_pe)
 
+# ── Auto MSA downloader ───────────────────────────────────────────────────────
+try:
+    from adaptive.auto_msa import (
+        ensure_msa               as _auto_ensure_msa,
+        start_background_prefetch as _auto_msa_prefetch,
+        prefetch_status           as _auto_msa_status,
+    )
+    _AUTO_MSA_AVAILABLE = True
+except Exception as _ame:
+    _AUTO_MSA_AVAILABLE = False
+    _auto_msa_err = str(_ame)
+
 # ── Config ────────────────────────────────────────────────────────────────────
 def _env(key, default=""):
     return os.environ.get(key, default)
@@ -353,9 +365,19 @@ print(json.dumps({{
 }}))
 """
 
-def _msa_path_for(uniprot_id: str) -> str:
+def _msa_path_for(uniprot_id: str, gene_name: str = "", download: bool = False) -> str:
+    """Return path to local .a3m or 'empty'.
+
+    If download=True and auto_msa is available, downloads the MSA synchronously
+    before returning (used for the current round's target when file is missing).
+    Pass download=False (default) for the fast cached-only check used in logging.
+    """
     path = MSA_DIR / f"{uniprot_id}.a3m"
-    return str(path) if path.exists() else "empty"
+    if path.exists() and path.stat().st_size > 1024:
+        return str(path)
+    if download and _AUTO_MSA_AVAILABLE:
+        return _auto_ensure_msa(uniprot_id, gene_name)  # type: ignore[possibly-unbound]
+    return "empty"
 
 def _sequence_from_msa(msa_path: str) -> str | None:
     if msa_path == "empty":
@@ -600,6 +622,9 @@ def main():
                 uid  = t["uniprot_id"]
                 flag = "✓ MSA" if _msa_path_for(uid) != "empty" else "✗ no MSA (single-seq)"
                 log.info(f"  {t['id']:8s} {uid}  {flag}")
+            # Launch background MSA prefetch for all targets (skips cached files)
+            if _AUTO_MSA_AVAILABLE:
+                _auto_msa_prefetch(targets)  # type: ignore[possibly-unbound]
             last_refresh = now
 
         # Round-robin over all fetched targets; submission eligibility is separate
@@ -608,7 +633,7 @@ def main():
         tid    = target["id"]
         thresh = target.get("target_score_threshold", -7.0)
         uid    = target["uniprot_id"]
-        msa    = _msa_path_for(uid)
+        msa    = _msa_path_for(uid, gene_name=target.get("gene_name", tid), download=True)
 
         # ── Molecule selection ────────────────────────────────────────────────
         # Priority 1: reference compound (at most once per REF_RESCREEN_INTERVAL)
