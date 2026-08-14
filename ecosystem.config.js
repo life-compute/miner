@@ -1,5 +1,11 @@
 // PM2 ecosystem — LIFE Compute Miner (devnet)
 // Nova dashboard already on :3000; life-compute uses :3001
+//
+// Epoch advancement is handled automatically inside miner_daemon.py.
+// Each miner checks whether the epoch has expired at the start of every
+// scoring cycle and calls advance_epoch if so.  No separate crank process
+// is needed — the first miner to detect an expired epoch advances it and
+// all miners benefit.
 module.exports = {
   apps: [
     {

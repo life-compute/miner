@@ -344,6 +344,175 @@ def fetch_network_stats() -> dict:
     return result
 
 
+# ── Epoch management ─────────────────────────────────────────────────────────
+
+_ADVANCE_EPOCH_JS = ANCHOR_DIR / "life_advance_epoch.js"
+_EPOCH_ADVANCE_COOLDOWN = 60.0   # seconds — skip re-check after a successful advance
+_last_advance_attempt   = 0.0
+
+
+def _read_epoch_state() -> dict | None:
+    """Decode epoch fields from the NetworkConfig PDA.
+
+    Returns a dict with keys:
+        current_epoch       int
+        epoch_start_slot    int
+        epoch_duration_slots int
+    or None on any RPC / parse failure.
+
+    NetworkConfig byte layout (Anchor-serialised):
+      0–7   discriminator
+      8–39  authority Pubkey
+      40–71 life_mint Pubkey
+      72–79 supply_cap u64
+      80–87 total_minted u64
+      88–95 current_epoch u64
+      96–103 epoch_start_slot i64
+      104–111 epoch_duration_slots u64
+    """
+    import base64 as _b64, struct as _struct
+    try:
+        res = _rpc("getAccountInfo", [_NETWORK_CONFIG_PDA, {"encoding": "base64"}])
+        if not isinstance(res, dict) or res.get("value") is None:
+            log.debug("[EPOCH] NetworkConfig PDA not found")
+            return None
+        raw = _b64.b64decode(res["value"]["data"][0])
+        if len(raw) < 112:
+            log.debug(f"[EPOCH] NetworkConfig too short: {len(raw)} bytes")
+            return None
+        current_epoch        = _struct.unpack_from("<Q", raw,  88)[0]
+        epoch_start_slot     = _struct.unpack_from("<q", raw,  96)[0]
+        epoch_duration_slots = _struct.unpack_from("<Q", raw, 104)[0]
+        return {
+            "current_epoch":        current_epoch,
+            "epoch_start_slot":     epoch_start_slot,
+            "epoch_duration_slots": epoch_duration_slots,
+        }
+    except Exception as e:
+        log.debug(f"[EPOCH] _read_epoch_state failed: {e}")
+        return None
+
+
+def _maybe_advance_epoch() -> None:
+    """Advance the on-chain epoch if it has expired.
+
+    Checks current_slot > epoch_start_slot + epoch_duration_slots on every
+    call.  When the epoch has expired this miner calls life_advance_epoch.js
+    which is permissionless — the first miner to call it advances the epoch and
+    all miners benefit.
+
+    Includes a Python-level 429 retry loop (3 attempts, 10 s backoff) on top of
+    the JS script's own retry logic so transient rate-limits don't silence the
+    attempt entirely.
+
+    Safe to call every cycle — no-op when epoch is still live.
+    """
+    global _last_advance_attempt
+
+    epoch_state = _read_epoch_state()
+    if epoch_state is None:
+        log.debug("[EPOCH] Could not read epoch state — skipping advance check")
+        return
+
+    current_slot = _rpc("getSlot", [])
+    if not isinstance(current_slot, int):
+        log.debug("[EPOCH] Could not fetch current slot — skipping advance check")
+        return
+
+    epoch_start    = epoch_state["epoch_start_slot"]
+    epoch_duration = epoch_state["epoch_duration_slots"]
+    current_epoch  = epoch_state["current_epoch"]
+    elapsed        = current_slot - epoch_start
+
+    log.debug(
+        f"[EPOCH] slot={current_slot}  epoch={current_epoch}  "
+        f"elapsed={elapsed}/{epoch_duration}  "
+        f"expired={'YES' if elapsed >= epoch_duration else 'NO'}"
+    )
+
+    if elapsed < epoch_duration:
+        return   # epoch still running — nothing to do
+
+    now = time.time()
+    if now - _last_advance_attempt < _EPOCH_ADVANCE_COOLDOWN:
+        log.debug("[EPOCH] Advance cooldown active — skipping duplicate attempt")
+        return
+
+    log.info(
+        f"[EPOCH] Advancing epoch {current_epoch} → {current_epoch + 1}  "
+        f"(slot {current_slot}, elapsed {elapsed}/{epoch_duration})"
+    )
+    _last_advance_attempt = now
+
+    MAX_RETRIES = 3
+    RETRY_DELAY = 10.0   # seconds
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            result = subprocess.run(
+                ["node", str(_ADVANCE_EPOCH_JS)],
+                capture_output=True, text=True, timeout=120,
+                cwd=str(ANCHOR_DIR),
+            )
+            # Parse the JSON result line from the JS script
+            resp = None
+            for line in reversed(result.stdout.strip().splitlines()):
+                try:
+                    resp = json.loads(line)
+                    break
+                except Exception:
+                    continue
+
+            if result.returncode == 0 and resp and resp.get("status") == "success":
+                log.info(
+                    f"[EPOCH] ✔ advance_epoch confirmed — "
+                    f"old={resp.get('old_epoch')}  new={resp.get('new_epoch')}  "
+                    f"tx={resp.get('tx','?')}"
+                )
+                return
+
+            # Check for 429 in stdout/stderr so we can retry
+            combined = (result.stdout + result.stderr).lower()
+            is_rate_limited = "429" in combined or "too many requests" in combined
+            is_not_ready    = "epoch not ready" in combined
+
+            if is_not_ready:
+                # Another miner already advanced — race is over
+                log.info("[EPOCH] Epoch already advanced by another miner (race won by peer)")
+                return
+
+            if is_rate_limited and attempt < MAX_RETRIES:
+                log.warning(
+                    f"[EPOCH] 429 rate-limit on attempt {attempt}/{MAX_RETRIES} — "
+                    f"retrying in {RETRY_DELAY:.0f}s"
+                )
+                time.sleep(RETRY_DELAY)
+                RETRY_DELAY *= 2   # exponential backoff
+                continue
+
+            log.warning(
+                f"[EPOCH] advance_epoch attempt {attempt}/{MAX_RETRIES} failed "
+                f"(rc={result.returncode})"
+            )
+            if result.stderr.strip():
+                log.warning(f"[EPOCH] stderr: {result.stderr.strip()[-400:]}")
+            if result.stdout.strip():
+                log.debug(f"[EPOCH] stdout: {result.stdout.strip()[-400:]}")
+
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY)
+                RETRY_DELAY *= 2
+
+        except subprocess.TimeoutExpired:
+            log.warning(f"[EPOCH] advance_epoch timed out (attempt {attempt}/{MAX_RETRIES})")
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY)
+        except Exception as e:
+            log.warning(f"[EPOCH] advance_epoch exception (attempt {attempt}/{MAX_RETRIES}): {e}")
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY)
+
+
 # ── Boltz2 scoring ────────────────────────────────────────────────────────────
 _BOLTZ_HELPER = """\
 import sys, json
@@ -626,6 +795,11 @@ def main():
             if _AUTO_MSA_AVAILABLE:
                 _auto_msa_prefetch(targets)  # type: ignore[possibly-unbound]
             last_refresh = now
+
+        # ── Epoch advance check ───────────────────────────────────────────────
+        # Permissionless: first miner to detect an expired epoch advances it;
+        # all other miners benefit automatically.  No-op when epoch is live.
+        _maybe_advance_epoch()
 
         # Round-robin over all fetched targets; submission eligibility is separate
         target = targets[target_idx % len(targets)]
