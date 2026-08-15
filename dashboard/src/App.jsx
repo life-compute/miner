@@ -121,7 +121,7 @@ const S = {
   }),
   grid: {
     display:       'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
+    gridTemplateColumns: 'repeat(4, 1fr)',
     gap:           '16px',
     padding:       '24px 28px',
     maxWidth:      '1440px',
@@ -482,7 +482,7 @@ function LiveScoringFeedPanel({ feed }) {
     T.greenDim
 
   return (
-    <Panel accent={T.cyan} style={{ gridColumn: 'span 2' }}>
+    <Panel accent={T.cyan}>
       <div style={S.panelTitle}>
         <span style={S.titleAccent(T.cyan)}>⬡</span>
         <span>LIVE SCORING FEED</span>
@@ -559,7 +559,7 @@ function CurrentMoleculePanel({ pub, priv }) {
   const generated = priv?.generated ?? []
   const recent  = generated.slice(0, 5)
   return (
-    <Panel accent={T.cyan} style={{ gridColumn: 'span 2' }}>
+    <Panel accent={T.cyan}>
       <div style={S.panelTitle}>
         <span style={S.titleAccent(T.cyan)}>⬡</span>
         <span>LIVE MOLECULAR ANALYSIS</span>
@@ -891,7 +891,7 @@ function PrivateNote() {
 /* ─── LIFE PULSE panel (dedicated /pulse endpoint) ──────────── */
 function LifePulsePanel({ pulse }) {
   if (!pulse) return (
-    <Panel accent={T.green} style={{ gridColumn: 'span 2' }}>
+    <Panel accent={T.green}>
       <div style={S.panelTitle}>
         <span style={S.titleAccent(T.green)}>⚡</span>
         <span>LIFE PULSE — MOLECULAR SWEEP ENGINE</span>
@@ -920,7 +920,7 @@ function LifePulsePanel({ pulse }) {
   const FCOL = { kinase: T.purple, cytokine: '#ff69b4', protease: '#ff8c00', nuclear_receptor: T.cyan, general: T.green }
 
   return (
-    <Panel accent={accent} style={{ gridColumn: 'span 2' }}>
+    <Panel accent={accent}>
       <div style={S.panelTitle}>
         <span style={S.titleAccent(T.green)}>⚡</span>
         <span>LIFE PULSE — MOLECULAR SWEEP ENGINE</span>
