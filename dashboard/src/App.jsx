@@ -1,4 +1,38 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import GridLayout from 'react-grid-layout'
+import 'react-grid-layout/css/styles.css'
+import 'react-resizable/css/styles.css'
+
+/* ─── Grid config ───────────────────────────────────────────── */
+const COLS   = 12
+const ROW_H  = 30
+const MARGIN = [16, 16]
+const LS_KEY = 'life-dash-layout-v1'
+
+const DEFAULT_LAYOUT = [
+  { i: 'system-status',   x: 0,  y: 0,  w: 3, h: 11, minW: 2, minH: 5 },
+  { i: 'molecules',       x: 3,  y: 0,  w: 3, h: 11, minW: 2, minH: 5 },
+  { i: 'life-earned',     x: 6,  y: 0,  w: 3, h: 11, minW: 2, minH: 5 },
+  { i: 'gpu-power',       x: 9,  y: 0,  w: 3, h: 11, minW: 2, minH: 5 },
+  { i: 'targets',         x: 0,  y: 11, w: 3, h: 11, minW: 2, minH: 5 },
+  { i: 'live-feed',       x: 3,  y: 11, w: 3, h: 11, minW: 2, minH: 5 },
+  { i: 'scoring-history', x: 6,  y: 11, w: 3, h: 11, minW: 2, minH: 5 },
+  { i: 'network',         x: 9,  y: 11, w: 3, h: 11, minW: 2, minH: 5 },
+  { i: 'life-pulse',      x: 0,  y: 22, w: 3, h: 11, minW: 2, minH: 5 },
+  { i: 'life-agent',      x: 0,  y: 33, w: 12, h: 22, minW: 4, minH: 10 },
+]
+
+function loadLayout() {
+  try {
+    const raw = localStorage.getItem(LS_KEY)
+    if (!raw) return DEFAULT_LAYOUT
+    const def = Object.fromEntries(DEFAULT_LAYOUT.map(d => [d.i, d]))
+    return JSON.parse(raw).map(s => ({ ...def[s.i], ...s })).filter(s => def[s.i])
+  } catch { return DEFAULT_LAYOUT }
+}
+function saveLayout(l) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(l)) } catch {}
+}
 
 /* ─── Biopunk theme tokens ──────────────────────────────────── */
 const T = {
@@ -155,6 +189,7 @@ const S = {
     overflow:      'hidden',
     boxShadow:     panelShadow(accent),
     transition:    'border-color 0.4s, box-shadow 0.4s',
+    height:        '100%',
   }),
   panelBar: (accent) => ({
     position:      'absolute',
@@ -183,6 +218,15 @@ const S = {
     display:       'flex',
     alignItems:    'center',
     gap:           '8px',
+    cursor:        'grab',
+    userSelect:    'none',
+  },
+  dragHandle: {
+    fontSize:      '13px',
+    opacity:       0.45,
+    marginRight:   '2px',
+    lineHeight:    1,
+    flexShrink:    0,
   },
   titleAccent: (c) => ({
     color:         c,
@@ -425,6 +469,17 @@ function useAnimatedNumber(target, dur = 800) {
   return disp
 }
 
+/* ─── Window width hook ─────────────────────────────────────── */
+function useWindowWidth() {
+  const [w, setW] = useState(window.innerWidth)
+  useEffect(() => {
+    const fn = () => setW(window.innerWidth)
+    window.addEventListener('resize', fn)
+    return () => window.removeEventListener('resize', fn)
+  }, [])
+  return w
+}
+
 /* ─── Panel wrapper ─────────────────────────────────────────── */
 function Panel({ accent = T.green, style, children }) {
   return (
@@ -448,7 +503,7 @@ function MinerStatusPanel({ alive, currentTarget, minerId, lastUpdated }) {
   ]
   return (
     <Panel accent={alive ? T.green : T.red}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.green)}>◈</span>
         <span>SYSTEM STATUS</span>
         <span style={{ marginLeft: 'auto', ...S.pill(alive ? T.green : T.red) }}>
@@ -483,7 +538,7 @@ function LiveScoringFeedPanel({ feed }) {
 
   return (
     <Panel accent={T.cyan}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.cyan)}>⬡</span>
         <span>LIVE SCORING FEED</span>
         <span style={{ marginLeft: 'auto', ...S.pill(T.cyan) }}>LIVE · 10s</span>
@@ -560,7 +615,7 @@ function CurrentMoleculePanel({ pub, priv }) {
   const recent  = generated.slice(0, 5)
   return (
     <Panel accent={T.cyan}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.cyan)}>⬡</span>
         <span>LIVE MOLECULAR ANALYSIS</span>
         <span style={{ marginLeft: 'auto', ...S.pill(T.cyan) }}>STREAMING</span>
@@ -622,7 +677,7 @@ function MoleculesPanel({ count }) {
   const n = useAnimatedNumber(count)
   return (
     <Panel accent={T.green}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.green)}>◉</span>
         <span>MOLECULES SCREENED</span>
       </div>
@@ -639,7 +694,7 @@ function LifeEarnedPanel({ earned }) {
   const n = useAnimatedNumber(Math.floor(earned))
   return (
     <Panel accent={T.purple}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.purple)}>✦</span>
         <span>$LIFE EARNED</span>
       </div>
@@ -676,7 +731,7 @@ function GpuPowerPanel() {
   ]
   return (
     <Panel accent={amber}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(amber)}>⚡</span>
         <span>GPU POWER MONITOR</span>
         <span style={{ marginLeft: 'auto', ...S.pill(amber) }}>AMBER</span>
@@ -710,7 +765,7 @@ function TargetsPanel({ targets }) {
   const GENES = ['TP53', 'BRCA1', 'EGFR', 'HER2', 'KRAS', 'BCL2', 'CDK4', 'VEGFR2', 'PDL1', 'MDM2']
   return (
     <Panel accent={T.cyan}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.cyan)}>⬡</span>
         <span>ACTIVE PROTEIN TARGETS</span>
         <span style={{ marginLeft: 'auto', color: T.cyan, textShadow: glow(T.cyan, 3),
@@ -790,7 +845,7 @@ function ScoringHistoryPanel({ history }) {
 
   return (
     <Panel accent={T.green}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.green)}>▲</span>
         <span>SCORING HISTORY — LAST 2H</span>
         <span style={{ marginLeft: 'auto', color: T.textDim, fontSize: '10px' }}>5m buckets · {scores.length} pts</span>
@@ -850,7 +905,7 @@ function NetworkPanel({ network }) {
   ]
   return (
     <Panel accent={T.cyan}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.cyan)}>◈</span>
         <span>GLOBAL NETWORK MONITOR</span>
         <span style={{ marginLeft: 'auto', ...S.pill(T.cyan) }}>ON-CHAIN</span>
@@ -892,7 +947,7 @@ function PrivateNote() {
 function LifePulsePanel({ pulse }) {
   if (!pulse) return (
     <Panel accent={T.green}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.green)}>⚡</span>
         <span>LIFE PULSE — MOLECULAR SWEEP ENGINE</span>
       </div>
@@ -921,7 +976,7 @@ function LifePulsePanel({ pulse }) {
 
   return (
     <Panel accent={accent}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.green)}>⚡</span>
         <span>LIFE PULSE — MOLECULAR SWEEP ENGINE</span>
         <span style={{ marginLeft: 'auto', ...S.pill(statusColor) }}>
@@ -1011,7 +1066,7 @@ function PulsePanel({ pulse }) {
   const FCOL = { kinase: T.purple, cytokine: '#ff69b4', protease: '#ff8c00', nuclear_receptor: T.cyan, general: T.green }
   return (
     <Panel accent={T.purple}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.purple)}>⚡</span>
         <span>LIFE PULSE — SOBOL SWEEP</span>
       </div>
@@ -1051,7 +1106,7 @@ function ArtPanel({ art }) {
   const top5 = Object.entries(feature_importances).sort((a,b)=>b[1]-a[1]).slice(0,5)
   return (
     <Panel accent={T.purple}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.purple)}>🧠</span>
         <span>LIFE ART — ML SCORER</span>
         <span style={{ marginLeft:'auto', ...S.pill(ready ? T.green : T.red) }}>
@@ -1103,7 +1158,7 @@ function ScoutPanel({ scout, priv }) {
   const pc = PC[last_phase] ?? T.textDim
   return (
     <Panel accent={T.cyan}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.cyan)}>🎯</span>
         <span>LIFE SCOUT — ROUTING</span>
         {last_phase !== '—' && <span style={{ marginLeft:'auto', ...S.pill(pc) }}>{last_phase.toUpperCase()}</span>}
@@ -1134,14 +1189,14 @@ function ScoutPanel({ scout, priv }) {
 function GeneratedPanel({ generated }) {
   if (!generated?.length) return (
     <Panel accent={T.purple}>
-      <div style={S.panelTitle}><span style={S.titleAccent(T.purple)}>🔮</span><span>GENERATED MOLECULES</span></div>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span><span style={S.titleAccent(T.purple)}>🔮</span><span>GENERATED MOLECULES</span></div>
       <PrivateNote />
       <div style={S.label}>GENERATIVE PHASE PENDING — STARTING IN FINAL 15% OF EPOCH</div>
     </Panel>
   )
   return (
     <Panel accent={T.purple}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.purple)}>🔮</span>
         <span>GENERATED MOLECULES</span>
         <span style={{ marginLeft:'auto', color: T.purple }}>{generated.length} recent</span>
@@ -1498,7 +1553,7 @@ function LifeAgentPanel() {
 
   return (
     <Panel accent={T.green} style={{ gridColumn: '1 / -1' }}>
-      <div style={S.panelTitle}>
+      <div className="drag-handle" style={S.panelTitle}><span style={S.dragHandle}>⠿</span>
         <span style={S.titleAccent(T.green)}>◈</span>
         <span>LIFE AGENT</span>
         <span style={{ marginLeft: 'auto', ...S.pill(T.green) }}>CLAUDE&nbsp;SONNET&nbsp;4&nbsp;·&nbsp;AI&nbsp;ASSISTANT</span>
@@ -1691,6 +1746,38 @@ const CSS = `
   ::-webkit-scrollbar-track { background: #050a05; }
   ::-webkit-scrollbar-thumb { background: #00ff4133; border-radius: 0; }
   ::-webkit-scrollbar-thumb:hover { background: #00ff4166; }
+  /* ── react-grid-layout ── */
+  .react-grid-item { transition: none !important; }
+  .react-grid-item.react-grid-placeholder {
+    background: #00ff4115 !important;
+    border: 1px dashed #00ff4155 !important;
+    border-radius: 3px !important;
+    opacity: 1 !important;
+  }
+  .drag-handle { cursor: grab !important; }
+  .drag-handle:active,
+  .react-draggable-dragging .drag-handle { cursor: grabbing !important; }
+  .reset-layout-btn {
+    background: transparent;
+    border: 1px solid #00ff4133;
+    color: #5a9a5a;
+    font-family: 'Courier New', monospace;
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    padding: 3px 10px;
+    cursor: pointer;
+    border-radius: 2px;
+    text-transform: uppercase;
+    transition: all 0.2s;
+    position: absolute;
+    bottom: 20px;
+    left: 32px;
+  }
+  .reset-layout-btn:hover {
+    border-color: #00ff4166;
+    color: #00ff41;
+    text-shadow: 0 0 6px #00ff41;
+  }
 `
 
 /* ─── App ───────────────────────────────────────────────────── */
@@ -1701,6 +1788,10 @@ export default function App() {
   const [pulse, setPulse] = useState(null)
   const [tick, setTick] = useState(null)
   const [local, setLocal] = useState(false)
+  const [layout, setLayout] = useState(loadLayout)
+  const winWidth       = useWindowWidth()
+  const onLayoutChange = useCallback(l => { setLayout(l); saveLayout(l) }, [])
+  const resetLayout    = useCallback(() => { setLayout(DEFAULT_LAYOUT); saveLayout(DEFAULT_LAYOUT) }, [])
 
   // Stats poll — every 5s
   useEffect(() => {
@@ -1776,65 +1867,63 @@ export default function App() {
                 POWERED BY BOLTZ2 MOLECULAR DOCKING · SOLANA BLOCKCHAIN
               </div>
             </div>
+            <button className="reset-layout-btn" onClick={resetLayout}>⊞ RESET LAYOUT</button>
             <div style={S.statusBadge(alive)}>
               <div style={S.statusDot(alive)} />
               {alive ? 'SYS:ONLINE' : 'SYS:OFFLINE'}
             </div>
           </header>
 
-          {/* ── Grid ── */}
-          <div style={S.grid}>
+          {/* ── Draggable grid ── */}
+          <div style={{ padding: '24px 28px', maxWidth: '1440px', margin: '0 auto' }}>
+            <GridLayout
+              layout={layout}
+              cols={COLS}
+              rowHeight={ROW_H}
+              width={Math.max(winWidth - 56, 640)}
+              margin={MARGIN}
+              containerPadding={[0, 0]}
+              onLayoutChange={onLayoutChange}
+              draggableHandle=".drag-handle"
+              compactType={null}
+              preventCollision={false}
+              isResizable={false}
+              isDraggable={true}
+              useCSSTransforms={true}
+            >
+              <div key="system-status"   style={{height:'100%'}}>
+                <MinerStatusPanel alive={alive} currentTarget={target}
+                                  minerId={minerId} lastUpdated={lastUpd} />
+              </div>
+              <div key="molecules"       style={{height:'100%'}}><MoleculesPanel  count={mols} /></div>
+              <div key="life-earned"     style={{height:'100%'}}><LifeEarnedPanel earned={life} /></div>
+              <div key="gpu-power"       style={{height:'100%'}}><GpuPowerPanel /></div>
+              <div key="targets"         style={{height:'100%'}}><TargetsPanel targets={tgts} /></div>
+              <div key="live-feed"       style={{height:'100%'}}><LiveScoringFeedPanel feed={feed} /></div>
+              <div key="scoring-history" style={{height:'100%'}}><ScoringHistoryPanel history={scoring} /></div>
+              <div key="network"         style={{height:'100%'}}><NetworkPanel network={network} /></div>
+              <div key="life-pulse"      style={{height:'100%'}}><LifePulsePanel pulse={pulse} /></div>
+              <div key="life-agent"      style={{height:'100%'}}><LifeAgentPanel /></div>
+            </GridLayout>
 
-            {/* Public */}
-            <div style={S.sectionLabel}>
-              <div style={S.sectionTick} />
-              PUBLIC // MINER TELEMETRY
-            </div>
-
-            <MinerStatusPanel alive={alive} currentTarget={target}
-                              minerId={minerId} lastUpdated={lastUpd} />
-            <MoleculesPanel   count={mols} />
-            <LifeEarnedPanel  earned={life} />
-            <GpuPowerPanel />
-            <TargetsPanel     targets={tgts} />
-            <LiveScoringFeedPanel feed={feed} />
-
-            <div style={S.sectionLabel}>
-              <div style={S.sectionTick} />
-              PUBLIC // PERFORMANCE &amp; NETWORK
-            </div>
-
-            <ScoringHistoryPanel history={scoring} />
-            <NetworkPanel        network={network} />
-
-            {/* LIFE PULSE — always visible (public endpoint) */}
-            <div style={S.sectionLabel}>
-              <div style={S.sectionTick} />
-              PUBLIC // LIFE PULSE — SOBOL MOLECULAR SWEEP
-            </div>
-            <LifePulsePanel pulse={pulse} />
-
-            {/* Private */}
+            {/* Private panels — static (localhost only) */}
             {local && (
               <>
-                <div style={{ ...S.sectionLabel, color: T.purple, textShadow: glow(T.purple, 2) }}>
-                  <div style={{ ...S.sectionTick, background: T.purple, boxShadow: glow(T.purple, 3) }} />
+                <div style={{ ...S.sectionLabel, marginTop: '16px', color: T.purple,
+                              textShadow: glow(T.purple, 2) }}>
+                  <div style={{ ...S.sectionTick, background: T.purple,
+                                boxShadow: glow(T.purple, 3) }} />
                   🔒 PRIVATE // LOCAL DIAGNOSTICS — NOT BROADCAST TO NETWORK
                 </div>
-                <PulsePanel     pulse={priv?.pulse} />
-                <ArtPanel       art={priv?.art} />
-                <ScoutPanel     scout={priv?.scout} priv={priv} />
-                <GeneratedPanel generated={priv?.generated} />
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+                              gap: '16px', marginTop: '16px' }}>
+                  <PulsePanel     pulse={priv?.pulse} />
+                  <ArtPanel       art={priv?.art} />
+                  <ScoutPanel     scout={priv?.scout} priv={priv} />
+                  <GeneratedPanel generated={priv?.generated} />
+                </div>
               </>
             )}
-
-            {/* LIFE AGENT — full-width AI assistant */}
-            <div style={S.sectionLabel}>
-              <div style={S.sectionTick} />
-              AI // LIFE AGENT — MINING ASSISTANT
-            </div>
-            <LifeAgentPanel />
-
           </div>
 
           {/* ── Footer ── */}
