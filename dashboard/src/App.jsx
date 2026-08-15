@@ -489,64 +489,70 @@ function LiveScoringFeedPanel({ feed }) {
         <span style={{ marginLeft: 'auto', ...S.pill(T.cyan) }}>LIVE · 10s</span>
       </div>
 
-      {/* header */}
-      <div style={{ display: 'grid',
-                    gridTemplateColumns: '70px 60px 1fr 72px 72px 42px 52px',
-                    gap: '8px', padding: '4px 0 6px',
-                    borderBottom: `1px solid ${T.border}`,
-                    fontSize: '9px', color: T.textDim, letterSpacing: '0.14em' }}>
-        <span>TIME</span><span>TARGET</span><span>SMILES</span>
-        <span style={{ textAlign:'right' }}>BOLTZ</span>
-        <span style={{ textAlign:'right' }}>AFF(kcal)</span>
-        <span style={{ textAlign:'center' }}>HIT?</span>
-        <span style={{ textAlign:'center' }}>SOURCE</span>
-      </div>
+      {/* scrollable table */}
+      <div style={{ overflowX: 'auto' }}>
+        <div style={{ minWidth: '520px' }}>
+          <div style={{ display: 'grid',
+                        gridTemplateColumns: '70px 60px 160px 72px 72px 42px 52px',
+                        gap: '8px', padding: '4px 0 6px',
+                        borderBottom: `1px solid ${T.border}`,
+                        fontSize: '9px', color: T.textDim, letterSpacing: '0.14em' }}>
+            <span>TIME</span><span>TARGET</span><span>SMILES</span>
+            <span style={{ textAlign:'right' }}>BOLTZ</span>
+            <span style={{ textAlign:'right' }}>AFF(kcal)</span>
+            <span style={{ textAlign:'center' }}>HIT?</span>
+            <span style={{ textAlign:'center' }}>SOURCE</span>
+          </div>
 
-      {rows.length === 0 ? (
-        <div style={{ color: T.textDim, fontSize: '11px', padding: '16px 0' }}>
-          AWAITING FIRST BOLTZ2 EVALUATION…
-          <span style={{ animation: 'blink 1s step-end infinite', color: T.green }}> █</span>
+          {rows.length === 0 ? (
+            <div style={{ color: T.textDim, fontSize: '11px', padding: '16px 0' }}>
+              AWAITING FIRST BOLTZ2 EVALUATION…
+              <span style={{ animation: 'blink 1s step-end infinite', color: T.green }}> █</span>
+            </div>
+          ) : rows.map((r, i) => (
+            <div key={i} style={{
+              display:             'grid',
+              gridTemplateColumns: '70px 60px 160px 72px 72px 42px 52px',
+              gap:                 '8px',
+              padding:             '6px 0',
+              borderBottom:        `1px solid #0a150a`,
+              fontSize:            '11px',
+              alignItems:          'center',
+              background:          i === 0 ? '#00ff4106' : 'transparent',
+            }}>
+              <span style={{ color: T.textDim, fontSize: '10px', fontVariantNumeric: 'tabular-nums' }}>
+                {r.ts ? r.ts.slice(11, 19) : '—'}
+              </span>
+              <span style={{ color: T.cyan, fontWeight: 700, textShadow: glow(T.cyan, 2) }}>
+                {r.target_id}
+              </span>
+              <span title={r.smiles || ''}
+                    style={{ color: T.green, overflow: 'hidden', textOverflow: 'ellipsis',
+                             whiteSpace: 'nowrap', fontSize: '10px', fontFamily: T.mono,
+                             cursor: 'default' }}>
+                {r.smiles ? (r.smiles.length > 20 ? r.smiles.slice(0, 20) + '…' : r.smiles) : '—'}
+              </span>
+              <span style={{ color: r.boltz_score != null ? T.cyan : T.textDim,
+                             textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                             textShadow: r.boltz_score != null ? glow(T.cyan, 2) : 'none' }}>
+                {r.boltz_score != null ? r.boltz_score.toFixed(4) : '—'}
+              </span>
+              <span style={{ color: T.text, textAlign: 'right',
+                             fontVariantNumeric: 'tabular-nums', fontSize: '10px' }}>
+                {r.affinity != null ? r.affinity.toFixed(3) : '—'}
+              </span>
+              <span style={{ textAlign: 'center' }}>
+                <span style={S.pill(r.hit ? T.green : T.red)}>{r.hit ? 'HIT' : 'MISS'}</span>
+              </span>
+              <span style={{ textAlign: 'center' }}>
+                <span style={{ ...S.pill(srcColor(r.source)), fontSize: '9px' }}>
+                  {(r.source || '?').slice(0, 7)}
+                </span>
+              </span>
+            </div>
+          ))}
         </div>
-      ) : rows.map((r, i) => (
-        <div key={i} style={{
-          display:             'grid',
-          gridTemplateColumns: '70px 60px 1fr 72px 72px 42px 52px',
-          gap:                 '8px',
-          padding:             '6px 0',
-          borderBottom:        `1px solid #0a150a`,
-          fontSize:            '11px',
-          alignItems:          'center',
-          background:          i === 0 ? '#00ff4106' : 'transparent',
-        }}>
-          <span style={{ color: T.textDim, fontSize: '10px', fontVariantNumeric: 'tabular-nums' }}>
-            {r.ts ? r.ts.slice(11, 19) : '—'}
-          </span>
-          <span style={{ color: T.cyan, fontWeight: 700, textShadow: glow(T.cyan, 2) }}>
-            {r.target_id}
-          </span>
-          <span style={{ color: T.green, overflow: 'hidden', textOverflow: 'ellipsis',
-                         whiteSpace: 'nowrap', fontSize: '10px', fontFamily: T.mono }}>
-            {r.smiles || '—'}
-          </span>
-          <span style={{ color: r.boltz_score != null ? T.cyan : T.textDim,
-                         textAlign: 'right', fontVariantNumeric: 'tabular-nums',
-                         textShadow: r.boltz_score != null ? glow(T.cyan, 2) : 'none' }}>
-            {r.boltz_score != null ? r.boltz_score.toFixed(4) : '—'}
-          </span>
-          <span style={{ color: T.text, textAlign: 'right',
-                         fontVariantNumeric: 'tabular-nums', fontSize: '10px' }}>
-            {r.affinity != null ? r.affinity.toFixed(3) : '—'}
-          </span>
-          <span style={{ textAlign: 'center' }}>
-            <span style={S.pill(r.hit ? T.green : T.red)}>{r.hit ? 'HIT' : 'MISS'}</span>
-          </span>
-          <span style={{ textAlign: 'center' }}>
-            <span style={{ ...S.pill(srcColor(r.source)), fontSize: '9px' }}>
-              {(r.source || '?').slice(0, 7)}
-            </span>
-          </span>
-        </div>
-      ))}
+      </div>
     </Panel>
   )
 }
@@ -933,42 +939,36 @@ function LifePulsePanel({ pulse }) {
       </div>
 
       {/* ── Top stats row ── */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'12px', marginBottom:'16px' }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:'8px', marginBottom:'12px' }}>
         {[
-          { v: total_evaluated.toLocaleString(), l: 'MOLECULES EXPLORED', c: T.green },
-          { v: sobol_index.toLocaleString(),     l: 'SOBOL INDEX',         c: T.cyan },
-          { v: current_batch_size,               l: 'BATCH SIZE (ADAPTIVE)',c: T.purple },
+          { v: total_evaluated.toLocaleString(), l: 'EXPLORED', c: T.green },
+          { v: sobol_index.toLocaleString(),     l: 'SOBOL IDX', c: T.cyan },
+          { v: current_batch_size,               l: 'BATCH SIZE', c: T.purple },
           { v: tanimoto_pass_rate != null ? `${tanimoto_pass_rate.toFixed(1)}%` : '—',
-            l: 'DIVERSITY PASS RATE', c: tanimoto_pass_rate != null && tanimoto_pass_rate < 30 ? T.red : T.green },
+            l: 'DIVERSITY', c: tanimoto_pass_rate != null && tanimoto_pass_rate < 30 ? T.red : T.green },
         ].map(({ v, l, c }) => (
-          <div key={l} style={{ padding:'10px 12px', background:'#020902',
+          <div key={l} style={{ padding:'8px 10px', background:'#020902',
                                 border:`1px solid ${c}22`, borderRadius:'2px' }}>
-            <div style={{ fontSize:'22px', fontWeight:700, color:c, textShadow:glow(c,3),
+            <div style={{ fontSize:'18px', fontWeight:700, color:c, textShadow:glow(c,3),
                           fontVariantNumeric:'tabular-nums' }}>{v}</div>
-            <div style={{ fontSize:'9px', color:T.textDim, letterSpacing:'0.14em',
-                          marginTop:'3px' }}>{l}</div>
+            <div style={{ fontSize:'9px', color:T.textDim, letterSpacing:'0.12em',
+                          marginTop:'2px' }}>{l}</div>
           </div>
         ))}
       </div>
 
       {/* ── Mutator stats ── */}
-      <div style={{ display:'flex', gap:'16px', marginBottom:'14px', fontSize:'11px' }}>
-        <div style={S.kv}>
-          <span style={{ color:T.textDim, fontSize:'10px', letterSpacing:'0.1em' }}>ELITE_MUTATIONS_ATTEMPTED</span>
-        </div>
-        <span style={{ color:T.purple, fontWeight:700, textShadow:glow(T.purple,2) }}>
-          {mutant_attempted.toLocaleString()}
-        </span>
-        <span style={{ color:T.textDim }}>/</span>
-        <div style={S.kv}>
-          <span style={{ color:T.textDim, fontSize:'10px', letterSpacing:'0.1em' }}>ACCEPTED</span>
-        </div>
+      <div style={{ fontSize:'10px', color:T.textDim, marginBottom:'10px', letterSpacing:'0.06em' }}>
+        MUTATIONS:{' '}
+        <span style={{ color:T.purple, fontWeight:700 }}>{mutant_attempted.toLocaleString()}</span>
+        {' attempted · '}
         <span style={{ color: mutant_accepted > 0 ? T.green : T.textDim, fontWeight:700 }}>
           {mutant_accepted.toLocaleString()}
         </span>
+        {' accepted'}
         {mutant_attempted > 0 && (
-          <span style={{ ...S.pill(T.cyan), marginLeft:'auto' }}>
-            {Math.round(mutant_accepted / mutant_attempted * 100)}% ACCEPT
+          <span style={{ ...S.pill(T.cyan), marginLeft:'8px', verticalAlign:'middle' }}>
+            {Math.round(mutant_accepted / mutant_attempted * 100)}%
           </span>
         )}
       </div>
