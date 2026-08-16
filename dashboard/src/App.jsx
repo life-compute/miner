@@ -1847,7 +1847,9 @@ export default function App() {
             <GpuPowerPanel />
             {gpuWorkers.length > 1 && <GpuWorkersPanel workers={gpuWorkers} />}
             <TargetsPanel     targets={tgts} />
-            <LiveScoringFeedPanel feed={feed} />
+            <div style={{ gridColumn: 'span 3' }}>
+              <LiveScoringFeedPanel feed={feed} />
+            </div>
 
             <div style={S.sectionLabel}>
               <div style={S.sectionTick} />
