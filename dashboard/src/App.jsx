@@ -1765,14 +1765,10 @@ export default function App() {
           {/* ── Header ── */}
           <header style={S.header}>
             <div style={S.headerInner}>
-              <DNAHelix />
-              <div style={S.tagline}>
-                ▓▒░ YOUR GPU IS FIGHTING CANCER ░▒▓
-              </div>
-              <div style={S.subtitle}>
+              <div style={{ fontSize: '26px', fontWeight: 700, color: '#00ff41', fontFamily: T.mono, letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'center' }}>
                 LIFE COMPUTE — DECENTRALIZED DRUG DISCOVERY NETWORK
               </div>
-              <div style={{ fontSize: '10px', color: T.textDim, letterSpacing: '0.16em' }}>
+              <div style={{ fontSize: '13px', color: '#00aa28', fontFamily: T.mono, letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'center' }}>
                 POWERED BY BOLTZ2 MOLECULAR DOCKING · SOLANA BLOCKCHAIN
               </div>
             </div>
