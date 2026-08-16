@@ -675,6 +675,132 @@ def write_stats(stats: dict):
     STATS_PATH.write_text(json.dumps(stats, indent=2))
 
 
+# ── Registration + balance gate ───────────────────────────────────────────────
+FREE_MINER_THRESHOLD = 20       # miners below this count register for free
+MIN_SOL_LAMPORTS     = 33_000_000  # 0.033 SOL
+
+
+def _get_sol_balance_lamports(wallet: str) -> int:
+    """Return wallet SOL balance in lamports via RPC, or 0 on failure."""
+    result = _rpc("getBalance", [wallet])
+    if isinstance(result, dict):
+        return int(result.get("value", 0))
+    return 0
+
+
+def _is_miner_registered() -> bool:
+    """Return True if a MinerAccount PDA exists for MINER_KEYPAIR's pubkey."""
+    # Derive pubkey from keypair file
+    try:
+        kp_data = json.loads(Path(MINER_KEYPAIR).read_bytes())
+        # Anchor / Solana keypair: 64-byte array [privkey(32) | pubkey(32)]
+        if isinstance(kp_data, list) and len(kp_data) == 64:
+            pubkey_bytes = bytes(kp_data[32:])
+            pubkey_b58   = _b58enc(pubkey_bytes)
+        else:
+            return False  # unrecognised format — assume not registered
+    except Exception:
+        return False
+
+    # Check if any MinerAccount has this pubkey as owner
+    import base64 as _b64
+    result = _rpc("getProgramAccounts", [
+        PROGRAM_ID,
+        {"encoding": "base64",
+         "filters": [{"memcmp": {"offset": 0, "bytes": _b58enc(_DISC_MINER)}}]},
+    ])
+    if not isinstance(result, list):
+        log.debug("[REGISTER] getProgramAccounts failed — assuming not registered")
+        return False
+
+    for item in result:
+        try:
+            raw = _b64.b64decode(item["account"]["data"][0])
+            # MinerAccount layout (Anchor): disc(8) + owner Pubkey(32) + …
+            if len(raw) >= 40 and raw[:8] == _DISC_MINER:
+                acct_owner = _b58enc(raw[8:40])
+                if acct_owner == pubkey_b58:
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def _check_registration_and_balance() -> None:
+    """
+    Gate: ensure the miner is registered (or can register) before mining begins.
+
+    Flow:
+      1. Already registered on-chain → proceed immediately.
+      2. Not registered + total_miners < FREE_MINER_THRESHOLD → free slot, proceed.
+      3. Not registered + balance >= 0.033 SOL → paid registration, proceed.
+      4. Not registered + balance < 0.033 SOL → print error and sys.exit(1).
+
+    Registration itself is handled by the Anchor JS client (submit_result.js /
+    register_miner instruction) on first submission — this function only gates
+    the balance requirement so the miner fails fast with a clear message instead
+    of running for hours then failing on-chain.
+    """
+    log.info("[REGISTER] Checking on-chain registration status...")
+    try:
+        if _is_miner_registered():
+            log.info("[REGISTER] ✓ Miner already registered on-chain — starting")
+            return
+
+        log.info("[REGISTER] Not yet registered — checking eligibility...")
+        total = _get_network_config_miners_registered()
+        if total is None:
+            log.warning("[REGISTER] Could not read on-chain miner count (RPC issue) — proceeding anyway")
+            return
+
+        log.info(f"[REGISTER] Total miners registered: {total}")
+
+        if total < FREE_MINER_THRESHOLD:
+            log.info(f"[REGISTER] ✓ Free registration slot available ({total} < {FREE_MINER_THRESHOLD}) — starting")
+            return
+
+        # Paid registration required — check balance
+        wallet = _env("SOLANA_WALLET", "")
+        if not wallet:
+            # Derive wallet from keypair file as fallback
+            try:
+                kp_data = json.loads(Path(MINER_KEYPAIR).read_bytes())
+                if isinstance(kp_data, list) and len(kp_data) == 64:
+                    wallet = _b58enc(bytes(kp_data[32:]))
+            except Exception:
+                pass
+
+        if not wallet:
+            log.warning("[REGISTER] Cannot determine wallet address — skipping balance check")
+            return
+
+        balance = _get_sol_balance_lamports(wallet)
+        balance_sol = balance / 1e9
+        log.info(f"[REGISTER] Wallet {wallet[:8]}… balance: {balance_sol:.4f} SOL")
+
+        if balance >= MIN_SOL_LAMPORTS:
+            log.info(f"[REGISTER] ✓ Balance sufficient ({balance_sol:.4f} SOL) — registration will proceed on first submission")
+            return
+
+        # Insufficient balance — hard exit with clear user-facing message
+        print()
+        print("╔══════════════════════════════════════════════════════════════╗")
+        print("║         INSUFFICIENT SOL to register as a miner             ║")
+        print("╠══════════════════════════════════════════════════════════════╣")
+        print(f"║  Wallet:   {wallet:<51}║")
+        print(f"║  Balance:  {balance_sol:.4f} SOL{' ' * 46}║")
+        print(f"║  Required: 0.033 SOL (~$5){' ' * 36}║")
+        print(f"║  Fund at:  https://phantom.app{' ' * 31}║")
+        print("╚══════════════════════════════════════════════════════════════╝")
+        print()
+        sys.exit(1)
+
+    except SystemExit:
+        raise
+    except Exception as e:
+        log.warning(f"[REGISTER] Registration check failed ({e}) — proceeding anyway")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     print("\033[92m    L I F E  C O M P U T E  \033[0m")
@@ -688,6 +814,9 @@ def main():
         sys.exit(1)
     if not _TOOLS_AVAILABLE:
         log.warning(f"Optional tools unavailable ({_tools_err}); using ZINC15-only mode")
+
+    # ── On-chain registration gate ────────────────────────────────────────────
+    _check_registration_and_balance()
 
     targets            : list             = []
     last_refresh       : float            = 0.0
