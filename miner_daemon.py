@@ -21,7 +21,7 @@ nova_pulse_scorer.score_batch() pattern; falls back to single-sequence mode
 when no MSA is available.
 """
 import json, time, random, logging, os, subprocess, sys, urllib.request, tempfile
-import threading
+import threading, multiprocessing
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -75,6 +75,30 @@ REF_COMPOUNDS_URL = _env("REF_COMPOUNDS_URL", "https://raw.githubusercontent.com
 POLL_SECONDS  = int(_env("POLL_SECONDS", "60"))
 TARGET_REFRESH       = 300      # seconds between target list refreshes
 REF_RESCREEN_INTERVAL = 4 * 3600.0  # screen each ref compound at most once per 4 h
+
+# ── Multi-GPU configuration ───────────────────────────────────────────────────
+def _detect_gpu_count() -> int:
+    """Return number of NVIDIA GPUs visible via nvidia-smi, or 1 on failure."""
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader,nounits"],
+            timeout=5, text=True, stderr=subprocess.DEVNULL)
+        n = len([l for l in out.strip().splitlines() if l.strip()])
+        return max(1, n)
+    except Exception:
+        return 1
+
+_GPU_COUNT_ENV = _env("GPU_COUNT", "1").strip().lower()
+if _GPU_COUNT_ENV == "auto":
+    GPU_COUNT = _detect_gpu_count()
+else:
+    try:
+        GPU_COUNT = max(1, int(_GPU_COUNT_ENV))
+    except ValueError:
+        GPU_COUNT = 1
+
+MULTI_GPU = GPU_COUNT > 1
+MIN_SOL_LAMPORTS_MULTI   = 100_000_000  # 0.1 SOL for multi-GPU registration
 
 WORK_DIR   = Path(__file__).parent
 STATS_PATH = WORK_DIR / "stats.json"
@@ -774,12 +798,17 @@ def _check_registration_and_balance() -> None:
             log.warning("[REGISTER] Cannot determine wallet address — skipping balance check")
             return
 
-        balance = _get_sol_balance_lamports(wallet)
-        balance_sol = balance / 1e9
-        log.info(f"[REGISTER] Wallet {wallet[:8]}… balance: {balance_sol:.4f} SOL")
+        # Multi-GPU miners pay a higher fee (0.1 SOL vs 0.033 SOL)
+        required_lamports = MIN_SOL_LAMPORTS_MULTI if MULTI_GPU else MIN_SOL_LAMPORTS
+        required_str      = "0.1 SOL (~$15) — multi-GPU" if MULTI_GPU else "0.033 SOL (~$5)"
 
-        if balance >= MIN_SOL_LAMPORTS:
-            log.info(f"[REGISTER] ✓ Balance sufficient ({balance_sol:.4f} SOL) — registration will proceed on first submission")
+        balance     = _get_sol_balance_lamports(wallet)
+        balance_sol = balance / 1e9
+        log.info(f"[REGISTER] Wallet {wallet[:8]}… balance: {balance_sol:.4f} SOL "
+                 f"(required: {required_str}, GPUs: {GPU_COUNT})")
+
+        if balance >= required_lamports:
+            log.info(f"[REGISTER] ✓ Balance sufficient — registration will proceed on first submission")
             return
 
         # Insufficient balance — hard exit with clear user-facing message
@@ -789,7 +818,8 @@ def _check_registration_and_balance() -> None:
         print("╠══════════════════════════════════════════════════════════════╣")
         print(f"║  Wallet:   {wallet:<51}║")
         print(f"║  Balance:  {balance_sol:.4f} SOL{' ' * 46}║")
-        print(f"║  Required: 0.033 SOL (~$5){' ' * 36}║")
+        print(f"║  Required: {required_str:<51}║")
+        print(f"║  GPUs:     {GPU_COUNT:<51}║")
         print(f"║  Fund at:  https://phantom.app{' ' * 31}║")
         print("╚══════════════════════════════════════════════════════════════╝")
         print()
@@ -799,6 +829,159 @@ def _check_registration_and_balance() -> None:
         raise
     except Exception as e:
         log.warning(f"[REGISTER] Registration check failed ({e}) — proceeding anyway")
+
+
+# ── GPU worker process ────────────────────────────────────────────────────────
+def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
+    """
+    Single-GPU mining loop.  Runs as a separate process (multiprocessing.Process).
+
+    - Sets CUDA_VISIBLE_DEVICES to isolate this worker to one physical GPU.
+    - Picks targets via round-robin with an offset of gpu_idx so workers
+      spread across different cancer targets simultaneously.
+    - Writes per-GPU rows to life_boltz_scores.jsonl (tagged gpu=N).
+    - Accumulates molecules_screened and life_earned into shared_stats.
+    """
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
+
+    # Per-worker logger tags every line with [GPU:N]
+    _fmt = logging.Formatter(
+        f"%(asctime)s  %(levelname)-8s  [GPU:{gpu_idx}]  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S")
+    _h = logging.StreamHandler()
+    _h.setFormatter(_fmt)
+    wlog = logging.getLogger(f"life-miner-gpu{gpu_idx}")
+    wlog.handlers = [_h]
+    wlog.setLevel(logging.INFO)
+    wlog.propagate = False
+
+    wlog.info(f"Worker started — GPU {gpu_idx}/{gpu_count-1}, CUDA_VISIBLE_DEVICES={gpu_idx}")
+
+    # Worker-local state
+    targets:           list             = []
+    last_refresh:      float            = 0.0
+    ref_compounds:     dict[str, str]   = {}
+    ref_scores:        dict[str, float] = {}
+    ref_last_screened: dict[str, float] = {}
+    best_boltz_smiles: list[str]        = []
+    sub_memory = SubmissionMemory() if _TOOLS_AVAILABLE else None  # type: ignore[possibly-unbound]
+
+    TARGET_ID_MAP = {
+        "TP53":   0, "BRCA1":  1, "EGFR":   2, "HER2":   3, "KRAS":   4,
+        "BCL2":   5, "CDK4":   6, "VEGFR2": 7, "PDL1":   8, "MDM2":   9,
+        "BRAF":  10, "PTEN":  11, "MYC":   12, "STAT3": 13, "PIK3CA": 14,
+        "MTOR":  15, "FGFR1": 16, "RET":   17, "AR":    18, "NTRK1":  19,
+        "IDH1":  20, "FLT3":  21, "SMAD4": 22, "APC":   23, "PARP1":  24,
+        "JAK2":  25, "ESR1":  26, "HDAC1": 27, "HDAC2": 28, "ABL1":   29,
+    }
+
+    # Offset target index so GPUs work different targets simultaneously
+    target_idx = gpu_idx
+
+    while True:
+        now = time.time()
+
+        if now - last_refresh > TARGET_REFRESH or not targets:
+            targets = fetch_targets()
+            if not targets:
+                wlog.warning("No targets — retrying in 30s")
+                time.sleep(30)
+                continue
+            ref_compounds = fetch_reference_compounds()
+            ref_scores.clear()
+            ref_last_screened.clear()
+            last_refresh = now
+
+        _maybe_advance_epoch()
+
+        target = targets[target_idx % len(targets)]
+        target_idx += gpu_count  # skip by gpu_count so workers stay spread
+        tid    = target["id"]
+        thresh = target.get("target_score_threshold", -7.0)
+        uid    = target["uniprot_id"]
+
+        # Reference compound screening (once per 4h per target per worker)
+        is_ref = False
+        ref_smiles = ref_compounds.get(tid)
+        if ref_smiles and (now - ref_last_screened.get(tid, 0)) > REF_RESCREEN_INTERVAL:
+            mol, source = ref_smiles, "reference"
+            is_ref = True
+            ref_last_screened[tid] = now
+        else:
+            try:
+                mol, source = _pick_molecule(target, sub_memory, best_boltz_smiles)
+            except Exception as _pe:
+                wlog.warning(f"_pick_molecule failed: {_pe}")
+                time.sleep(5)
+                continue
+
+        wlog.info(f"Target: {tid} | Mol: {mol[:60]}  [{source}]")
+        wlog.info("Running Boltz2 GPU scoring...")
+
+        t0      = time.time()
+        result  = run_boltz2_scoring(mol, target)
+        elapsed = time.time() - t0
+
+        boltz_score     = result.get("boltz_score")
+        boltz_seed_used = result.get("seed", BOLTZ_SEED)
+        affinity        = _boltz_score_to_affinity(boltz_score)
+
+        if is_ref and affinity is not None:
+            ref_scores[tid] = affinity
+
+        eff_thresh = ref_scores[tid] + 0.5 if tid in ref_scores else thresh
+        hit        = affinity is not None and affinity <= eff_thresh
+        score_str  = f"{affinity:.3f}" if affinity is not None else "None"
+
+        wlog.info(f"  score={score_str}  {'✔ HIT' if hit else '✘ miss'}  {elapsed:.1f}s")
+
+        # Write to shared JSONL feed (file-level append is atomic on Linux)
+        _boltz_jsonl = WORK_DIR / "output" / "life_boltz_scores.jsonl"
+        try:
+            _boltz_jsonl.parent.mkdir(exist_ok=True)
+            with _boltz_jsonl.open("a") as _fh:
+                _fh.write(json.dumps({
+                    "ts": time.time(), "target_id": tid, "smiles": mol,
+                    "boltz_score": boltz_score, "affinity": affinity,
+                    "hit": hit, "source": source, "gpu": gpu_idx,
+                }) + "\n")
+        except Exception as _je:
+            wlog.debug(f"JSONL write failed: {_je}")
+
+        # Update per-GPU shared stats key
+        life_delta = 0.0
+        if hit and affinity is not None and TARGET_ID_MAP.get(tid) is not None:
+            resp = submit_on_chain(TARGET_ID_MAP[tid], mol, affinity, boltz_seed_used)
+            if resp and resp.get("status") == "submitted":
+                tx_sig = resp.get("signature", "")
+                tier_reward = {1: 1.0, 2: 5.0, 3: 25.0}.get(target.get("difficulty_tier", 1), 1.0)
+                life_delta = tier_reward
+                wlog.info(f"  ✔ tx: {tx_sig}")
+
+        # Accumulate into shared manager dict
+        try:
+            key_mols  = f"gpu{gpu_idx}_molecules"
+            key_life  = f"gpu{gpu_idx}_life"
+            key_target = f"gpu{gpu_idx}_target"
+            key_score  = f"gpu{gpu_idx}_score"
+            key_power  = f"gpu{gpu_idx}_power"
+            shared_stats[key_mols]   = shared_stats.get(key_mols, 0) + 1
+            shared_stats[key_life]   = shared_stats.get(key_life, 0.0) + life_delta
+            shared_stats[key_target] = tid
+            shared_stats[key_score]  = affinity
+            # Read own GPU power
+            try:
+                _pw = subprocess.check_output(
+                    ["nvidia-smi", f"--id={gpu_idx}", "--query-gpu=power.draw",
+                     "--format=csv,noheader,nounits"], timeout=3, text=True).strip()
+                shared_stats[key_power] = float(_pw) if _pw else None
+            except Exception:
+                pass
+        except Exception:
+            pass  # manager proxy may fail transiently — non-fatal
+
+        wlog.info(f"Sleeping {POLL_SECONDS}s...")
+        time.sleep(POLL_SECONDS)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -818,6 +1001,93 @@ def main():
     # ── On-chain registration gate ────────────────────────────────────────────
     _check_registration_and_balance()
 
+    # ── GPU startup banner ────────────────────────────────────────────────────
+    gpu_names = []
+    try:
+        _gn = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader,nounits"],
+            timeout=5, text=True, stderr=subprocess.DEVNULL).strip().splitlines()
+        gpu_names = [g.strip() for g in _gn]
+    except Exception:
+        pass
+    if MULTI_GPU:
+        log.info(f"MULTI-GPU MODE: spawning {GPU_COUNT} workers")
+        for i, gname in enumerate(gpu_names[:GPU_COUNT]):
+            log.info(f"  GPU {i}: {gname}")
+    else:
+        log.info(f"SINGLE-GPU MODE: GPU 0 = {gpu_names[0] if gpu_names else 'unknown'}")
+
+    # ── Multi-GPU worker dispatch ─────────────────────────────────────────────
+    if MULTI_GPU:
+        mgr = multiprocessing.Manager()
+        shared = mgr.dict()
+        workers = []
+        for gpu_idx in range(GPU_COUNT):
+            p = multiprocessing.Process(
+                target=gpu_worker,
+                args=(gpu_idx, GPU_COUNT, shared),
+                name=f"life-gpu-{gpu_idx}",
+                daemon=True,
+            )
+            p.start()
+            workers.append(p)
+            log.info(f"  Started worker PID {p.pid} → GPU {gpu_idx}")
+
+        # Supervisor loop: aggregate stats and write stats.json every 30s
+        stats = {
+            "alive": True, "current_target": "", "gpu_count": GPU_COUNT,
+            "molecules_screened": 0, "life_earned": 0.0,
+            "targets_contributed": [], "transactions": [],
+            "tools": {"available": _TOOLS_AVAILABLE},
+            "global": {"total_miners": None, "molecules_screened": None, "targets_solved": None},
+            "started_at": datetime.now(timezone.utc).isoformat(), "last_updated": "",
+            "gpu_workers": [],
+        }
+        write_stats(stats)
+
+        while True:
+            time.sleep(30)
+            # Restart any dead worker
+            for i, p in enumerate(workers):
+                if not p.is_alive():
+                    log.warning(f"[SUPERVISOR] GPU {i} worker died — restarting")
+                    new_p = multiprocessing.Process(
+                        target=gpu_worker,
+                        args=(i, GPU_COUNT, shared),
+                        name=f"life-gpu-{i}",
+                        daemon=True,
+                    )
+                    new_p.start()
+                    workers[i] = new_p
+
+            # Aggregate per-GPU stats
+            total_mols = sum(shared.get(f"gpu{i}_molecules", 0) for i in range(GPU_COUNT))
+            total_life = sum(shared.get(f"gpu{i}_life", 0.0)    for i in range(GPU_COUNT))
+            gpu_workers_info = []
+            for i, gname in enumerate(gpu_names[:GPU_COUNT]):
+                gpu_workers_info.append({
+                    "gpu":       i,
+                    "name":      gname,
+                    "target":    shared.get(f"gpu{i}_target"),
+                    "last_score": shared.get(f"gpu{i}_score"),
+                    "power_w":   shared.get(f"gpu{i}_power"),
+                    "molecules": shared.get(f"gpu{i}_molecules", 0),
+                    "life":      shared.get(f"gpu{i}_life", 0.0),
+                })
+
+            stats.update({
+                "alive":              True,
+                "gpu_count":          GPU_COUNT,
+                "molecules_screened": total_mols,
+                "life_earned":        total_life,
+                "gpu_workers":        gpu_workers_info,
+                "last_updated":       datetime.now(timezone.utc).isoformat(),
+                "global":             fetch_network_stats(),
+            })
+            write_stats(stats)
+        return  # supervisor loop is infinite; workers run as daemons
+
+    # ── Single-GPU path (GPU_COUNT == 1) ─────────────────────────────────────
     targets            : list             = []
     last_refresh       : float            = 0.0
     molecules_done     : int              = 0

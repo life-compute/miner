@@ -11,6 +11,10 @@ PROGRAM_ID="${PROGRAM_ID:-74RHjg1zYgN9zuVykde4SK2ERiRgNkouATW9MmQDLRWf}"
 FREE_MINER_THRESHOLD=20          # miners < this count = free registration
 MIN_SOL_LAMPORTS=33000000        # 0.033 SOL in lamports
 
+# ── GPU detection ─────────────────────────────────────────────────────────────
+GPU_COUNT_DETECTED=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l || echo 1)
+GPU_COUNT_DETECTED=$((GPU_COUNT_DETECTED > 0 ? GPU_COUNT_DETECTED : 1))
+
 # ── Colours ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m' GRN='\033[0;32m' YEL='\033[1;33m' CYN='\033[0;36m' RST='\033[0m'
 info()  { echo -e "${GRN}[life-compute]${RST} $*"; }
@@ -35,6 +39,12 @@ WALLET="${SOLANA_WALLET:-${WALLET:-}}"
 if [[ -z "$WALLET" ]]; then
     error "No wallet configured. Set WALLET in the HiveOS flight sheet."
     exit 1
+fi
+
+# HiveOS rigs are typically multi-GPU — default to auto
+ENV_FILE="$MINER_DIR/.env"
+if ! grep -q '^GPU_COUNT=' "$ENV_FILE" 2>/dev/null; then
+    echo "GPU_COUNT=auto" >> "$ENV_FILE"
 fi
 
 # ── 2. Check on-chain registration (Python one-liner using existing daemon RPC) ─
@@ -174,10 +184,16 @@ if [[ "$REGISTERED" == false ]]; then
 
         if [[ "$BALANCE_LAMPORTS" -lt "$MIN_SOL_LAMPORTS" ]]; then
             echo
+            if [[ "$GPU_COUNT_DETECTED" -ge 2 ]]; then
+                REQ_FEE="0.1 SOL (~\$15) — multi-GPU fee"
+                MIN_SOL_LAMPORTS=100000000
+            else
+                REQ_FEE="0.033 SOL (~\$5)"
+            fi
             error "INSUFFICIENT SOL — Add at least 0.033 SOL to your wallet"
             echo -e "  ${CYN}Wallet:          ${RST}${WALLET}"
             echo -e "  ${CYN}Current balance: ${RST}${BALANCE_SOL} SOL"
-            echo -e "  ${CYN}Required:        ${RST}0.033 SOL (~\$5)"
+            echo -e "  ${CYN}Required:        ${RST}${REQ_FEE}"
             echo -e "  ${CYN}Fund your wallet at: ${RST}https://phantom.app"
             echo
             exit 1
@@ -202,3 +218,4 @@ pm2 save --force
 
 info "✓ life-miner     started"
 info "✓ life-dashboard started (port ${DASHBOARD_PORT:-3001})"
+info "GPU count: ${GPU_COUNT_DETECTED} (GPU_COUNT=auto in .env)"

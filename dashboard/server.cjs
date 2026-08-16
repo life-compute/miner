@@ -193,6 +193,8 @@ function buildPublicStats() {
     network,
     started_at:          s.started_at          ?? null,
     last_updated:        s.last_updated        ?? null,
+    gpu_count:           s.gpu_count           ?? 1,
+    gpu_workers:         s.gpu_workers         ?? [],
     ts:                  Date.now(),
   };
 }
@@ -289,17 +291,26 @@ const gpuCache = { data: null };
 
 function pollGpu() {
   exec(
-    'nvidia-smi --query-gpu=power.draw,utilization.gpu,temperature.gpu,memory.used,memory.total --format=csv,noheader,nounits',
+    'nvidia-smi --query-gpu=power.draw,utilization.gpu,temperature.gpu,memory.used,memory.total,name --format=csv,noheader,nounits',
     { timeout: 4000 },
     (err, stdout) => {
       if (err || !stdout.trim()) {
-        gpuCache.data = { error: 'NO GPU DATA' };
+        gpuCache.data = { error: 'NO GPU DATA', gpus: [] };
         return;
       }
-      const [pd, gu, temp, mu, mt] = stdout.trim().split(',').map(s => parseFloat(s.trim()));
-      gpuCache.data = isNaN(pd)
-        ? { error: 'NO GPU DATA' }
-        : { power_draw: pd, gpu_util: gu, temperature: temp, memory_used: mu, memory_total: mt };
+      const gpus = stdout.trim().split('\n').map((line, idx) => {
+        const [pd, gu, temp, mu, mt, ...nameParts] = line.split(',').map(s => s.trim());
+        const name = nameParts.join(',').trim() || `GPU ${idx}`;
+        const f = parseFloat.bind(null);
+        return isNaN(f(pd))
+          ? null
+          : { idx, name, power_draw: f(pd), gpu_util: f(gu), temperature: f(temp),
+              memory_used: f(mu), memory_total: f(mt) };
+      }).filter(Boolean);
+
+      gpuCache.data = gpus.length === 0
+        ? { error: 'NO GPU DATA', gpus: [] }
+        : { gpus, ...gpus[0] };   // top-level fields = GPU 0 for backward compat
     }
   );
 }

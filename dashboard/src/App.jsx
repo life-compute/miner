@@ -715,6 +715,54 @@ function GpuPowerPanel() {
   )
 }
 
+/* ─── GPU Workers panel (multi-GPU) ────────────────────────────── */
+function GpuWorkersPanel({ workers }) {
+  const amber = '#ff8c00'
+  if (!workers || workers.length === 0) return null
+  const totalMols = workers.reduce((s, w) => s + (w.molecules || 0), 0)
+  const totalLife = workers.reduce((s, w) => s + (w.life     || 0), 0)
+  return (
+    <Panel accent={amber}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(amber)}>⚡</span>
+        <span>GPU WORKERS — {workers.length} GPUs ACTIVE</span>
+        <span style={{ marginLeft: 'auto', ...S.pill(amber) }}>MULTI-GPU</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(workers.length, 4)}, 1fr)`, gap: '10px', marginTop: '10px' }}>
+        {workers.map(w => {
+          const tempColor = (w.power_w || 0) > 80 ? '#ff003c' : (w.power_w || 0) > 70 ? amber : '#00ff41'
+          return (
+            <div key={w.gpu} style={{ background: '#0a140a', border: `1px solid ${amber}44`, borderRadius: '2px', padding: '10px' }}>
+              <div style={{ fontSize: '10px', color: amber, letterSpacing: '0.12em', marginBottom: '6px', fontWeight: 700 }}>
+                GPU {w.gpu} — {(w.name || '').replace('NVIDIA GeForce ', '').replace('NVIDIA ', '')}
+              </div>
+              {[
+                { label: 'TARGET',     value: w.target     || '—',                                           color: '#00ffff' },
+                { label: 'LAST SCORE', value: w.last_score != null ? w.last_score.toFixed(3) : '—',          color: '#00ff41' },
+                { label: 'POWER',      value: w.power_w    != null ? `${w.power_w.toFixed(0)}W` : '—',       color: amber },
+                { label: 'MOLECULES',  value: w.molecules  != null ? w.molecules.toLocaleString() : '—',     color: T.text },
+              ].map(({ label, value, color }) => (
+                <div key={label} style={{ ...S.kv, marginBottom: '2px' }}>
+                  <span style={{ color: T.textDim, fontSize: '10px' }}>{label}</span>
+                  <span style={{ color, fontWeight: 700, fontSize: '11px', textShadow: glow(color, 2) }}>{value}</span>
+                </div>
+              ))}
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: '24px', marginTop: '10px', paddingTop: '8px', borderTop: `1px solid ${amber}22` }}>
+        <span style={{ fontSize: '11px', color: T.textDim }}>
+          COMBINED MOLECULES: <span style={{ color: T.green, fontWeight: 700 }}>{totalMols.toLocaleString()}</span>
+        </span>
+        <span style={{ fontSize: '11px', color: T.textDim }}>
+          COMBINED $LIFE: <span style={{ color: amber, fontWeight: 700 }}>{totalLife.toFixed(2)}</span>
+        </span>
+      </div>
+    </Panel>
+  )
+}
+
 /* ─── Cancer targets panel ──────────────────────────────────── */
 function TargetsPanel({ targets }) {
   const GENES = ['TP53', 'BRCA1', 'EGFR', 'HER2', 'KRAS', 'BCL2', 'CDK4', 'VEGFR2', 'PDL1', 'MDM2']
@@ -1748,15 +1796,16 @@ export default function App() {
     return () => clearInterval(id)
   }, [])
 
-  const alive   = pub?.alive              ?? false
-  const mols    = pub?.molecules_screened ?? 0
-  const life    = pub?.life_earned        ?? 0
-  const tgts    = pub?.targets_contributed ?? []
-  const network = pub?.network            ?? {}
-  const scoring = pub?.scoring_history    ?? []
-  const target  = pub?.current_target    ?? '—'
-  const minerId = pub?.miner_id          ?? '—'
-  const lastUpd = pub?.last_updated      ?? null
+  const alive     = pub?.alive              ?? false
+  const mols      = pub?.molecules_screened ?? 0
+  const life      = pub?.life_earned        ?? 0
+  const tgts      = pub?.targets_contributed ?? []
+  const network   = pub?.network            ?? {}
+  const scoring   = pub?.scoring_history    ?? []
+  const target    = pub?.current_target    ?? '—'
+  const minerId   = pub?.miner_id          ?? '—'
+  const lastUpd   = pub?.last_updated      ?? null
+  const gpuWorkers = pub?.gpu_workers      ?? []
 
   return (
     <>
@@ -1796,6 +1845,7 @@ export default function App() {
             <MoleculesPanel   count={mols} />
             <LifeEarnedPanel  earned={life} />
             <GpuPowerPanel />
+            {gpuWorkers.length > 1 && <GpuWorkersPanel workers={gpuWorkers} />}
             <TargetsPanel     targets={tgts} />
             <LiveScoringFeedPanel feed={feed} />
 
