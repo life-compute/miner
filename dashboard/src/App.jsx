@@ -664,21 +664,25 @@ function GpuPowerPanel() {
   const [gpu, setGpu] = useState(null)
   useEffect(() => {
     async function poll() {
-      try { const r = await fetch('/stats?' + Date.now()); if (r.ok) { const d = await r.json(); setGpu(d?.gpu ?? null) } } catch {}
+      try { const r = await fetch('/gpu?' + Date.now()); if (r.ok) setGpu(await r.json()) } catch {}
     }
     poll()
     const id = setInterval(poll, 5000)
     return () => clearInterval(id)
   }, [])
 
-  const amber = '#ff8c00'
-  const pct   = gpu?.power_draw_w != null ? Math.min(100, (gpu.power_draw_w / 400) * 100) : null
-  const rows  = [
-    { label: 'GPU.POWER', value: gpu?.power_draw_w  != null ? `${gpu.power_draw_w.toFixed(0)}W`          : 'N/A', color: amber },
-    { label: 'GPU.UTIL',  value: gpu?.utilization_pct != null ? `${gpu.utilization_pct.toFixed(0)}%`     : 'N/A', color: '#00ffff' },
-    { label: 'VRAM.USED', value: gpu?.memory_used_mb   != null ? `${(gpu.memory_used_mb/1024).toFixed(1)}GB` : 'N/A', color: '#00ff41' },
-    { label: 'GPU.TEMP',  value: gpu?.temperature_c != null ? `${gpu.temperature_c}°C` : 'N/A',
-      color: gpu?.temperature_c > 80 ? '#ff003c' : gpu?.temperature_c > 70 ? amber : '#00ff41' },
+  const amber  = '#ff8c00'
+  const noData = !gpu || gpu.error
+  const pct    = noData ? null : Math.min(100, (gpu.power_draw / 400) * 100)
+  const tempColor = noData ? amber
+    : gpu.temperature > 80 ? '#ff003c'
+    : gpu.temperature > 70 ? amber
+    : '#00ff41'
+  const rows = [
+    { label: 'POWER',    value: noData ? 'NO GPU DATA' : `${gpu.power_draw.toFixed(0)}W`,                                  color: amber },
+    { label: 'GPU UTIL', value: noData ? '—'           : `${gpu.gpu_util.toFixed(0)}%`,                                    color: '#00ffff' },
+    { label: 'TEMP',     value: noData ? '—'           : `${gpu.temperature}°C`,                                           color: tempColor },
+    { label: 'VRAM',     value: noData ? '—'           : `${(gpu.memory_used/1024).toFixed(1)}GB / ${(gpu.memory_total/1024).toFixed(0)}GB`, color: '#00ff41' },
   ]
   return (
     <Panel accent={amber}>
@@ -703,7 +707,7 @@ function GpuPowerPanel() {
           </div>
           <div style={{ fontSize: '9px', color: '#5a9a5a', letterSpacing: '0.08em',
                         marginTop: '4px', textAlign: 'right' }}>
-            {gpu.power_draw_w.toFixed(0)}W / 400W TDP
+            {gpu.power_draw.toFixed(0)}W / 400W TDP
           </div>
         </div>
       )}

@@ -284,6 +284,28 @@ function buildAdaptive() {
   };
 }
 
+/* ── GPU stats poller — runs nvidia-smi every 5s, caches result ──── */
+const gpuCache = { data: null };
+
+function pollGpu() {
+  exec(
+    'nvidia-smi --query-gpu=power.draw,utilization.gpu,temperature.gpu,memory.used,memory.total --format=csv,noheader,nounits',
+    { timeout: 4000 },
+    (err, stdout) => {
+      if (err || !stdout.trim()) {
+        gpuCache.data = { error: 'NO GPU DATA' };
+        return;
+      }
+      const [pd, gu, temp, mu, mt] = stdout.trim().split(',').map(s => parseFloat(s.trim()));
+      gpuCache.data = isNaN(pd)
+        ? { error: 'NO GPU DATA' }
+        : { power_draw: pd, gpu_util: gu, temperature: temp, memory_used: mu, memory_total: mt };
+    }
+  );
+}
+pollGpu();
+setInterval(pollGpu, 5000);
+
 /* ── LIFE AGENT — Anthropic API proxy ───────────────────────────── */
 
 /** Read full POST body as parsed JSON. */
@@ -471,6 +493,16 @@ http.createServer(async (req, res) => {
       });
       res.end(JSON.stringify({ rows, ts: Date.now() }));
     } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: String(e) })); }
+    return;
+  }
+
+  /* /gpu — public: live nvidia-smi data, cached 4s ──────────────────────────── */
+  if (url === '/gpu') {
+    res.writeHead(200, {
+      'Content-Type':                'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify(gpuCache.data));
     return;
   }
 
