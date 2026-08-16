@@ -1549,7 +1549,7 @@ function LifeAgentPanel() {
   if (configured === null) return null
 
   return (
-    <Panel accent={T.green} style={{ gridColumn: '1 / -1' }}>
+    <Panel accent={T.green} style={{ gridColumn: '1 / -1', border: '3px solid #ff69b4', boxShadow: '0 0 15px #ff69b4, 0 0 30px #ff69b4' }}>
       <div style={S.panelTitle}>
         <span style={S.titleAccent(T.green)}>◈</span>
         <span>LIFE AGENT</span>
@@ -1819,7 +1819,7 @@ export default function App() {
           <header style={S.header}>
             <div style={S.headerInner}>
               <div style={{ fontSize: '26px', fontWeight: 700, color: '#00ff41', fontFamily: T.mono, letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'center' }}>
-                LIFE COMPUTE — DECENTRALIZED DRUG DISCOVERY NETWORK
+                LIFE COM<span style={{ color: '#ff69b4' }}>PUTE</span> — DECENTRALIZED DRUG DISCOVERY NETWORK
               </div>
               <div style={{ fontSize: '13px', color: '#00aa28', fontFamily: T.mono, letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'center' }}>
                 POWERED BY BOLTZ2 MOLECULAR DOCKING · SOLANA BLOCKCHAIN
