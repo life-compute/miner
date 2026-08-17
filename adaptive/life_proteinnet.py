@@ -254,6 +254,7 @@ def _train_target(target_id: str, uniprot_id: str, rows: list[dict]) -> Optional
         r2 = float(np.mean(cv_scores))
     except Exception:
         r2 = float(model.score(X_arr, y_arr))   # train-set R² as fallback
+    r2 = max(-1.0, min(1.0, r2))   # clamp: near-zero-variance targets (e.g. SMAD4) produce ±1e5
 
     _save_model(uniprot_id, model)
     _models[target_id] = model
