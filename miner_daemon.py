@@ -63,6 +63,18 @@ except Exception as _ame:
     _AUTO_MSA_AVAILABLE = False
     _auto_msa_err = str(_ame)
 
+# ── ProteinNet — per-protein ML pre-screener ──────────────────────────────────
+try:
+    from adaptive.life_proteinnet import (
+        train_all       as _pnet_train_all,
+        pre_screen      as _pnet_pre_screen,
+        get_model_report as _pnet_get_report,
+    )
+    _PNET_AVAILABLE = True
+except Exception as _pne:
+    _PNET_AVAILABLE = False
+    _pnet_pre_screen = _pnet_train_all = _pnet_get_report = None  # type: ignore[assignment]
+
 # ── Config ────────────────────────────────────────────────────────────────────
 def _env(key, default=""):
     return os.environ.get(key, default)
@@ -153,12 +165,33 @@ def _pick_molecule(target: dict, sub_memory, best_smiles: list[str]) -> tuple[st
     -------
     (smiles, label)  — label is logged and stored for diagnostics
     """
+    tid = target.get("id", "").upper()
+    uid = target.get("uniprot_id", tid)
+    seq = target.get("protein_sequence", "")
+    is_large_protein = len(seq) > 800   # APC=2843aa, BRCA1=1863aa, SMAD4=552aa
+
+    # ── ProteinNet pre-screen pool (built once, shared across priorities) ──────
+    # For large proteins: 5000 candidates → top 20 to avoid wasting Boltz2 time.
+    # For normal proteins: 2000 candidates → top 100.
+    _pnet_pool: list[str] = []
+    if _PNET_AVAILABLE and _zinc_cache and _pnet_pre_screen is not None:
+        try:
+            if is_large_protein:
+                _n_screen, _top_k = 5000, 20
+            else:
+                _n_screen, _top_k = 2000, 100
+            _sample = random.sample(_zinc_cache, min(_n_screen, len(_zinc_cache)))
+            _pnet_pool = _pnet_pre_screen(_sample, tid, top_n=_top_k)
+            _mode_str  = "Large protein mode — " if is_large_protein else ""
+            log.info(f"[PROTEINNET] {_mode_str}{len(_sample)} screened → top {len(_pnet_pool)} for {tid}")
+        except Exception as _pne_err:
+            log.debug(f"[PROTEINNET] pre_screen failed (non-fatal): {_pne_err}")
+
     # ── Priority 1: LIFE PULSE top candidates (Sobol sweep + EliteMutator)
     if _PULSE_AVAILABLE:
         try:
             # Map target ID to protein family for focused sampling
             family = None
-            tid = target.get("id", "").upper()
             if tid in ("EGFR", "HER2", "KRAS", "BRAF", "VEGFR2", "FGFR1", "RET",
                        "ABL1", "CDK4", "FLT3", "JAK2", "NTRK1"):
                 family = "kinase"
@@ -193,9 +226,19 @@ def _pick_molecule(target: dict, sub_memory, best_smiles: list[str]) -> tuple[st
                 except concurrent.futures.TimeoutError:
                     log.warning(
                         f"[GENERATE] Phase 4 timed out after {_GENERATE_TIMEOUT}s "
-                        f"for target={target.get('id', '?')} — skipping, continuing to zinc15"
+                        f"for target={tid} — skipping, continuing to zinc15"
                     )
                     gen_cands = []
+            # ProteinNet filter: only forward generated candidates above model threshold
+            if gen_cands and _PNET_AVAILABLE and _pnet_pre_screen is not None:
+                try:
+                    gen_smiles  = [smi for _, smi, _ in gen_cands]
+                    filtered    = _pnet_pre_screen(gen_smiles, tid, top_n=len(gen_smiles))
+                    filtered_set = set(filtered)
+                    gen_cands   = [(l, s, sc) for l, s, sc in gen_cands if s in filtered_set]
+                    log.debug(f"[PROTEINNET] Phase 4 filter: {len(gen_smiles)} → {len(gen_cands)} for {tid}")
+                except Exception as _gpf:
+                    log.debug(f"[PROTEINNET] Phase 4 filter failed (non-fatal): {_gpf}")
             novel = sub_memory.filter_novel(gen_cands) if gen_cands else []
             if novel:
                 _, smi, _ = novel[0]
@@ -203,7 +246,15 @@ def _pick_molecule(target: dict, sub_memory, best_smiles: list[str]) -> tuple[st
         except Exception as _ge:
             log.debug(f"[GENERATE] failed (non-fatal): {_ge}")
 
-    # ── Priority 3: random ZINC15 sample (always works)
+    # ── Priority 3: ProteinNet-pre-screened ZINC15 (best predicted binders first)
+    if _pnet_pool:
+        if sub_memory is not None:
+            _novel_pnet = sub_memory.filter_novel(_pnet_pool)
+            if _novel_pnet:
+                return _novel_pnet[0], "proteinnet"
+        return _pnet_pool[0], "proteinnet"
+
+    # ── Priority 4: random ZINC15 sample (always works)
     return _sample_zinc15(), "zinc15"
 
 
@@ -1152,6 +1203,22 @@ def main():
         threading.Thread(target=_pulse_loop, daemon=True, name="pulse-sweep").start()
     else:
         log.warning(f"[PULSE] life_pulse unavailable — pulse sweep disabled ({_pulse_err})")
+
+    # ── ProteinNet background retrain loop ────────────────────────────────────
+    if _PNET_AVAILABLE and _pnet_train_all is not None:
+        def _pnet_retrain_loop():
+            # Build target→uniprot map from targets.json on first call
+            _t_map: dict[str, str] = {}
+            while True:
+                try:
+                    tgts = fetch_targets()
+                    _t_map = {t["id"]: t["uniprot_id"] for t in tgts if "id" in t and "uniprot_id" in t}
+                    _pnet_train_all(_t_map)
+                except Exception as _rte:
+                    log.debug(f"[PROTEINNET] retrain error (non-fatal): {_rte}")
+                time.sleep(300)   # check every 5 min; train_all() is a no-op when up to date
+        threading.Thread(target=_pnet_retrain_loop, daemon=True, name="proteinnet-retrain").start()
+        log.info("[PROTEINNET] Background retrain thread started (every 5 min)")
 
     stats = {
         "alive": True,

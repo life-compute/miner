@@ -84,6 +84,20 @@ except Exception as _e:  # noqa: BLE001
     download_chembl_actives = get_chembl_actives = validate_against_chembl = None  # type: ignore[assignment]
     get_chembl_seeds = chembl_download_all = None  # type: ignore[assignment]
 
+# ── life_proteinnet (per-protein ML pre-screener) ─────────────────────────────
+try:
+    from .life_proteinnet import (
+        train_all       as proteinnet_train_all,
+        pre_screen      as proteinnet_pre_screen,
+        get_model_report,
+        should_retrain  as proteinnet_should_retrain,
+    )
+except Exception as _e:  # noqa: BLE001
+    import warnings
+    warnings.warn(f"adaptive.life_proteinnet unavailable: {_e}", ImportWarning, stacklevel=2)
+    proteinnet_train_all = proteinnet_pre_screen = None  # type: ignore[assignment]
+    get_model_report = proteinnet_should_retrain = None  # type: ignore[assignment]
+
 __all__ = [
     "run_sweep", "get_next_candidates", "proxy_score",
     "art_train", "rank_candidates", "load_model",
@@ -93,4 +107,6 @@ __all__ = [
     "fragment_recombination", "scaffold_hopping", "guided_mutation",
     "download_chembl_actives", "get_chembl_actives", "validate_against_chembl",
     "get_chembl_seeds", "chembl_download_all",
+    "proteinnet_train_all", "proteinnet_pre_screen", "get_model_report",
+    "proteinnet_should_retrain",
 ]

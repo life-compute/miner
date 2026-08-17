@@ -1096,6 +1096,101 @@ function PulsePanel({ pulse }) {
   )
 }
 
+/* ── Public ART status panel (no private fields) ─────────────── */
+/* ─── PROTEINNET panel ──────────────────────────────────────── */
+function ProteinNetPanel({ proteinnet }) {
+  if (!proteinnet) return null
+  const { n_ready = 0, n_total = 0, top5 = [], generated_at = null } = proteinnet
+  const lastUpdate = generated_at ? new Date(generated_at * 1000).toLocaleString() : '—'
+
+  function ageFmt(ts) {
+    if (!ts) return '—'
+    const s = Math.floor((Date.now() / 1000) - ts)
+    if (s < 60)   return `${s}s ago`
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`
+    return `${Math.floor(s / 3600)}h ago`
+  }
+
+  const colStyle = { color: T.textDim, fontSize: '10px', fontWeight: 700, letterSpacing: '0.05em' }
+  const hdrRow   = { display: 'grid', gridTemplateColumns: '52px 52px 82px 48px 62px 1fr', gap: '4px', padding: '4px 0', borderBottom: `1px solid ${T.green}33` }
+
+  return (
+    <Panel accent={T.green} style={{ gridColumn: '1 / -1' }}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(T.green)}>🧬</span>
+        <span>PROTEINNET — PER-TARGET MODELS</span>
+        <span style={{ marginLeft: 'auto', ...S.pill(n_ready > 0 ? T.green : T.textDim) }}>
+          {n_ready}/{n_total || 30} READY
+        </span>
+      </div>
+
+      {/* Header row */}
+      <div style={hdrRow}>
+        {['TARGET','UNIPROT','TRAIN ROWS','R²','STATUS','LAST TRAINED'].map(h => (
+          <span key={h} style={colStyle}>{h}</span>
+        ))}
+      </div>
+
+      {top5.length === 0 ? (
+        <div style={{ color: T.textDim, fontSize: '11px', padding: '8px 0' }}>
+          Waiting for ≥30 Boltz2 scores per target to train models…
+        </div>
+      ) : top5.map(m => {
+        const r2Color   = m.r2 != null && m.r2 >= 0.3 ? T.green : m.r2 != null && m.r2 >= 0.1 ? T.amber : T.textDim
+        const statColor = m.status === 'ready' ? T.green : T.textDim
+        return (
+          <div key={m.target_id} style={{ display: 'grid', gridTemplateColumns: '52px 52px 82px 48px 62px 1fr', gap: '4px', padding: '3px 0', borderBottom: `1px solid ${T.green}18` }}>
+            <span style={{ color: T.green, fontWeight: 700, fontSize: '11px', textShadow: glow(T.green, 1) }}>{m.target_id}</span>
+            <span style={{ color: T.cyan,  fontSize: '11px' }}>{m.uniprot_id}</span>
+            <span style={{ color: T.cyan,  fontSize: '11px', textAlign: 'right', paddingRight: '8px' }}>{m.n}</span>
+            <span style={{ color: r2Color, fontWeight: 700, fontSize: '11px', textShadow: glow(r2Color, 1) }}>
+              {m.r2 != null ? m.r2.toFixed(2) : '—'}
+            </span>
+            <span style={{ color: statColor, fontSize: '10px', fontWeight: 700, letterSpacing: '0.05em' }}>
+              {m.status.toUpperCase()}
+            </span>
+            <span style={{ color: T.textDim, fontSize: '11px' }}>{ageFmt(m.last_trained)}</span>
+          </div>
+        )
+      })}
+
+      {/* Footer summary */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontSize: '10px' }}>
+        <span style={{ color: T.textDim }}>NETWORK: {n_ready}/{n_total || 30} models ready</span>
+        <span style={{ color: T.textDim }}>LAST_SYNC: {lastUpdate}</span>
+      </div>
+    </Panel>
+  )
+}
+
+function PublicArtPanel({ art }) {
+  if (!art) return null
+  const { ready=false, n_rows=0, r2=null, ts=null } = art
+  const lastTrained = ts ? new Date(ts * 1000).toLocaleString() : '—'
+  return (
+    <Panel accent={T.purple}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(T.purple)}>🧠</span>
+        <span>ART MODEL STATUS</span>
+        <span style={{ marginLeft:'auto', ...S.pill(ready ? T.green : T.red) }}>
+          {ready ? 'READY' : 'NOT READY'}
+        </span>
+      </div>
+      {[
+        { k: 'MODEL_STATUS',  v: ready ? 'READY' : 'NOT READY', c: ready ? T.green : T.red },
+        { k: 'TRAINING_ROWS', v: n_rows,                          c: T.cyan },
+        { k: 'R²_SCORE',      v: r2 != null ? r2.toFixed(2) : '—', c: r2 != null && r2 >= 0.25 ? T.green : T.textDim },
+        { k: 'LAST_TRAINED',  v: lastTrained,                     c: T.textDim },
+      ].map(({ k, v, c }) => (
+        <div key={k} style={S.kv}>
+          <span style={{ color: T.textDim, fontSize: '11px' }}>{k}</span>
+          <span style={{ color: c, fontWeight: 700, textShadow: glow(c, 2), fontSize: '11px' }}>{v}</span>
+        </div>
+      ))}
+    </Panel>
+  )
+}
+
 function ArtPanel({ art }) {
   if (!art) return null
   const { ready=false, n_rows=0, r2=null, reason='—', boltz_accumulated=0,
@@ -1858,6 +1953,8 @@ export default function App() {
 
             <ScoringHistoryPanel history={scoring} />
             <NetworkPanel        network={network} />
+            <PublicArtPanel      art={pub?.art} />
+            <ProteinNetPanel     proteinnet={pub?.proteinnet} />
 
             {/* LIFE PULSE — always visible (public endpoint) */}
             <div style={S.sectionLabel}>

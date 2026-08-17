@@ -138,6 +138,7 @@ function isMinerAlive(s) {
 /* ── /stats — PUBLIC data ────────────────────────────────────────── */
 function buildPublicStats() {
   const s         = readJson(STATS) || {};
+  const artReport = readJson(path.join(OUT, 'life_art_report.json')) || {};
   // Read ALL boltz rows so early high scores (e.g. 0.0174 from day 1) are included.
   // tailJsonl(200) was silently dropping the best historical scores.
   const boltzRows = tailJsonl(path.join(OUT, 'life_boltz_scores.jsonl'), 100000);
@@ -196,6 +197,33 @@ function buildPublicStats() {
     gpu_count:           s.gpu_count           ?? 1,
     gpu_workers:         s.gpu_workers         ?? [],
     ts:                  Date.now(),
+    art: {
+      ready:   artReport.ready  ?? false,
+      n_rows:  artReport.n_rows ?? 0,
+      r2:      artReport.r2     ?? null,
+      ts:      artReport.ts     ?? null,
+    },
+    proteinnet: (() => {
+      const report = readJson(path.join(OUT, 'protein_models', 'proteinnet_report.json')) || {};
+      const models = report.models || {};
+      const entries = Object.entries(models).map(([tid, v]) => ({
+        target_id:    tid,
+        uniprot_id:   v.uniprot_id  ?? tid,
+        n:            v.n           ?? 0,
+        r2:           v.r2          ?? null,
+        status:       v.status      ?? 'learning',
+        last_trained: v.last_trained ?? null,
+      }));
+      const ready = entries.filter(e => e.status === 'ready');
+      ready.sort((a, b) => (b.r2 ?? -1) - (a.r2 ?? -1));
+      return {
+        n_ready:  report.n_ready  ?? 0,
+        n_total:  report.n_total  ?? 0,
+        top5:     ready.slice(0, 5),
+        all:      entries,
+        generated_at: report.generated_at ?? null,
+      };
+    })(),
   };
 }
 
