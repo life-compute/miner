@@ -22,6 +22,7 @@ when no MSA is available.
 """
 import json, time, random, logging, os, subprocess, sys, urllib.request, tempfile
 import threading, multiprocessing
+import concurrent.futures
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -179,9 +180,22 @@ def _pick_molecule(target: dict, sub_memory, best_smiles: list[str]) -> tuple[st
             log.debug(f"[PULSE] candidate pick failed (non-fatal): {_pulse_pick_err}")
 
     # ── Priority 2: Generative AI (when real Boltz2 scores available)
+    # Wrapped in a 60-second ThreadPoolExecutor timeout to prevent BRICSBuild
+    # or other RDKit C-extension calls from hanging the main loop indefinitely
+    # (observed: APC/P25054 hangs Phase 4 for >6h via futex_wait_queue).
+    _GENERATE_TIMEOUT = 60
     if _TOOLS_AVAILABLE and best_smiles and sub_memory is not None:
         try:
-            gen_cands = generate_candidates(target, art_model=None, n_total=50)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _gen_pool:
+                _gen_future = _gen_pool.submit(generate_candidates, target, None, 50)
+                try:
+                    gen_cands = _gen_future.result(timeout=_GENERATE_TIMEOUT)
+                except concurrent.futures.TimeoutError:
+                    log.warning(
+                        f"[GENERATE] Phase 4 timed out after {_GENERATE_TIMEOUT}s "
+                        f"for target={target.get('id', '?')} — skipping, continuing to zinc15"
+                    )
+                    gen_cands = []
             novel = sub_memory.filter_novel(gen_cands) if gen_cands else []
             if novel:
                 _, smi, _ = novel[0]
