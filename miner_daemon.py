@@ -213,22 +213,26 @@ def _pick_molecule(target: dict, sub_memory, best_smiles: list[str]) -> tuple[st
             log.debug(f"[PULSE] candidate pick failed (non-fatal): {_pulse_pick_err}")
 
     # ── Priority 2: Generative AI (when real Boltz2 scores available)
-    # Wrapped in a 60-second ThreadPoolExecutor timeout to prevent BRICSBuild
-    # or other RDKit C-extension calls from hanging the main loop indefinitely
-    # (observed: APC/P25054 hangs Phase 4 for >6h via futex_wait_queue).
+    # Wrapped in a 60-second timeout to prevent BRICSBuild / RDKit C-extension
+    # calls from hanging the main loop indefinitely (APC/SMAD4 observed >6h).
+    # CRITICAL: do NOT use `with ThreadPoolExecutor` here — the context manager
+    # calls shutdown(wait=True) on exit, which blocks until the C thread dies
+    # (never) even after TimeoutError is caught. Use shutdown(wait=False) instead.
     _GENERATE_TIMEOUT = 60
     if _TOOLS_AVAILABLE and best_smiles and sub_memory is not None:
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _gen_pool:
-                _gen_future = _gen_pool.submit(generate_candidates, target, None, 50)
-                try:
-                    gen_cands = _gen_future.result(timeout=_GENERATE_TIMEOUT)
-                except concurrent.futures.TimeoutError:
-                    log.warning(
-                        f"[GENERATE] Phase 4 timed out after {_GENERATE_TIMEOUT}s "
-                        f"for target={tid} — skipping, continuing to zinc15"
-                    )
-                    gen_cands = []
+            _gen_pool   = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            _gen_future = _gen_pool.submit(generate_candidates, target, None, 50)
+            try:
+                gen_cands = _gen_future.result(timeout=_GENERATE_TIMEOUT)
+            except concurrent.futures.TimeoutError:
+                log.warning(
+                    f"[GENERATE] Phase 4 timed out after {_GENERATE_TIMEOUT}s "
+                    f"for target={tid} — skipping, continuing to zinc15"
+                )
+                gen_cands = []
+            finally:
+                _gen_pool.shutdown(wait=False, cancel_futures=True)  # never block on hung C thread
             # ProteinNet filter: only forward generated candidates above model threshold
             if gen_cands and _PNET_AVAILABLE and _pnet_pre_screen is not None:
                 try:
