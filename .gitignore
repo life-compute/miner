@@ -12,6 +12,7 @@ dist/
 build/
 # Runtime keypairs — never commit
 *-keypair.json
+*-keypair-*.json
 dev-keypair.json
 miner-keypair.json
 # Runtime state

@@ -1,0 +1,1129 @@
+{
+    "address": "74RHjg1zYgN9zuVykde4SK2ERiRgNkouATW9MmQDLRWf",
+    "metadata": {
+        "name": "life_core",
+        "version": "0.1.0",
+        "spec": "0.1.0",
+        "description": "LIFE Compute \u2014 Decentralized cancer drug discovery network"
+    },
+    "instructions": [
+        {
+            "name": "initialize",
+            "discriminator": [
+                175,
+                175,
+                109,
+                31,
+                13,
+                152,
+                155,
+                237
+            ],
+            "accounts": [
+                {
+                    "name": "authority",
+                    "writable": true,
+                    "signer": true
+                },
+                {
+                    "name": "network_config",
+                    "writable": true
+                },
+                {
+                    "name": "life_mint",
+                    "writable": true
+                },
+                {
+                    "name": "mint_authority"
+                },
+                {
+                    "name": "token_program"
+                },
+                {
+                    "name": "system_program"
+                },
+                {
+                    "name": "rent"
+                }
+            ],
+            "args": [
+                {
+                    "name": "supply_cap",
+                    "type": "u64"
+                },
+                {
+                    "name": "epoch_duration_slots",
+                    "type": "u64"
+                },
+                {
+                    "name": "validators_required",
+                    "type": "u8"
+                },
+                {
+                    "name": "validation_tolerance",
+                    "type": "f32"
+                },
+                {
+                    "name": "initial_validators",
+                    "type": {
+                        "vec": "pubkey"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "register_target",
+            "discriminator": [
+                206,
+                50,
+                9,
+                192,
+                134,
+                195,
+                15,
+                138
+            ],
+            "accounts": [
+                {
+                    "name": "authority",
+                    "writable": true,
+                    "signer": true
+                },
+                {
+                    "name": "network_config"
+                },
+                {
+                    "name": "target",
+                    "writable": true
+                },
+                {
+                    "name": "system_program"
+                }
+            ],
+            "args": [
+                {
+                    "name": "target_id",
+                    "type": "u16"
+                },
+                {
+                    "name": "uniprot_id",
+                    "type": {
+                        "array": [
+                            "u8",
+                            10
+                        ]
+                    }
+                },
+                {
+                    "name": "difficulty",
+                    "type": {
+                        "defined": {
+                            "name": "DifficultyTier"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "register_miner",
+            "discriminator": [
+                101,
+                185,
+                46,
+                223,
+                72,
+                27,
+                180,
+                14
+            ],
+            "accounts": [
+                {
+                    "name": "miner",
+                    "writable": true,
+                    "signer": true
+                },
+                {
+                    "name": "miner_account",
+                    "writable": true
+                },
+                {
+                    "name": "network_config",
+                    "writable": true
+                },
+                {
+                    "name": "foundation",
+                    "writable": true
+                },
+                {
+                    "name": "system_program"
+                }
+            ],
+            "args": []
+        },
+        {
+            "name": "register_validator",
+            "discriminator": [
+                118,
+                98,
+                251,
+                58,
+                81,
+                30,
+                13,
+                240
+            ],
+            "accounts": [
+                {
+                    "name": "validator",
+                    "writable": true,
+                    "signer": true
+                },
+                {
+                    "name": "network_config",
+                    "writable": true
+                },
+                {
+                    "name": "foundation",
+                    "writable": true
+                },
+                {
+                    "name": "system_program"
+                }
+            ],
+            "args": []
+        },
+        {
+            "name": "assign_job",
+            "discriminator": [
+                37,
+                235,
+                105,
+                13,
+                196,
+                58,
+                248,
+                10
+            ],
+            "accounts": [
+                {
+                    "name": "crank",
+                    "writable": true,
+                    "signer": true
+                },
+                {
+                    "name": "network_config"
+                },
+                {
+                    "name": "target"
+                },
+                {
+                    "name": "miner"
+                },
+                {
+                    "name": "miner_account",
+                    "writable": true
+                },
+                {
+                    "name": "job_assignment",
+                    "writable": true
+                },
+                {
+                    "name": "system_program"
+                }
+            ],
+            "args": [
+                {
+                    "name": "target_id",
+                    "type": "u16"
+                },
+                {
+                    "name": "seq",
+                    "type": "u8"
+                }
+            ]
+        },
+        {
+            "name": "submit_result",
+            "discriminator": [
+                240,
+                42,
+                89,
+                180,
+                10,
+                239,
+                9,
+                214
+            ],
+            "accounts": [
+                {
+                    "name": "miner",
+                    "writable": true,
+                    "signer": true
+                },
+                {
+                    "name": "network_config"
+                },
+                {
+                    "name": "miner_account",
+                    "writable": true
+                },
+                {
+                    "name": "owner"
+                },
+                {
+                    "name": "job_assignment",
+                    "writable": true
+                },
+                {
+                    "name": "result_submission",
+                    "writable": true
+                },
+                {
+                    "name": "system_program"
+                }
+            ],
+            "args": [
+                {
+                    "name": "smiles",
+                    "type": "string"
+                },
+                {
+                    "name": "claimed_affinity",
+                    "type": "f32"
+                }
+            ]
+        },
+        {
+            "name": "validate_result",
+            "discriminator": [
+                4,
+                64,
+                234,
+                91,
+                107,
+                31,
+                162,
+                196
+            ],
+            "accounts": [
+                {
+                    "name": "payer",
+                    "writable": true,
+                    "signer": true
+                },
+                {
+                    "name": "validator",
+                    "writable": true,
+                    "signer": true
+                },
+                {
+                    "name": "network_config"
+                },
+                {
+                    "name": "target",
+                    "writable": true
+                },
+                {
+                    "name": "result_submission",
+                    "writable": true
+                },
+                {
+                    "name": "validation_record",
+                    "writable": true
+                },
+                {
+                    "name": "weekly_leaderboard",
+                    "writable": true
+                },
+                {
+                    "name": "system_program"
+                },
+                {
+                    "name": "validator_account",
+                    "writable": true
+                }
+            ],
+            "args": [
+                {
+                    "name": "rescored_affinity",
+                    "type": "f32"
+                }
+            ]
+        },
+        {
+            "name": "mint_reward",
+            "discriminator": [
+                172,
+                211,
+                182,
+                208,
+                125,
+                37,
+                188,
+                252
+            ],
+            "accounts": [
+                {
+                    "name": "crank",
+                    "writable": true,
+                    "signer": true
+                },
+                {
+                    "name": "network_config",
+                    "writable": true
+                },
+                {
+                    "name": "life_mint",
+                    "writable": true
+                },
+                {
+                    "name": "mint_authority"
+                },
+                {
+                    "name": "result_submission",
+                    "writable": true
+                },
+                {
+                    "name": "target"
+                },
+                {
+                    "name": "miner_account",
+                    "writable": true
+                },
+                {
+                    "name": "miner_ata",
+                    "writable": true
+                },
+                {
+                    "name": "token_program"
+                },
+                {
+                    "name": "system_program"
+                }
+            ],
+            "args": []
+        },
+        {
+            "name": "claim_discovery_bonus",
+            "discriminator": [
+                37,
+                146,
+                116,
+                109,
+                227,
+                149,
+                82,
+                249
+            ],
+            "accounts": [
+                {
+                    "name": "miner",
+                    "signer": true
+                },
+                {
+                    "name": "network_config"
+                },
+                {
+                    "name": "life_mint",
+                    "writable": true
+                },
+                {
+                    "name": "mint_authority"
+                },
+                {
+                    "name": "weekly_leaderboard",
+                    "writable": true
+                },
+                {
+                    "name": "miner_account",
+                    "writable": true
+                },
+                {
+                    "name": "miner_ata",
+                    "writable": true
+                },
+                {
+                    "name": "token_program"
+                },
+                {
+                    "name": "system_program"
+                }
+            ],
+            "args": []
+        },
+        {
+            "name": "advance_epoch",
+            "discriminator": [
+                93,
+                138,
+                234,
+                218,
+                241,
+                230,
+                132,
+                38
+            ],
+            "accounts": [
+                {
+                    "name": "crank",
+                    "signer": true
+                },
+                {
+                    "name": "network_config",
+                    "writable": true
+                }
+            ],
+            "args": []
+        },
+        {
+            "name": "updateValidators",
+            "discriminator": [
+                211,
+                66,
+                122,
+                122,
+                121,
+                107,
+                148,
+                111
+            ],
+            "accounts": [
+                {
+                    "name": "authority",
+                    "signer": true
+                },
+                {
+                    "name": "networkConfig",
+                    "writable": true,
+                    "pda": {
+                        "seeds": [
+                            {
+                                "kind": "const",
+                                "value": [
+                                    110,
+                                    101,
+                                    116,
+                                    119,
+                                    111,
+                                    114,
+                                    107,
+                                    95,
+                                    99,
+                                    111,
+                                    110,
+                                    102,
+                                    105,
+                                    103
+                                ]
+                            }
+                        ]
+                    }
+                }
+            ],
+            "args": [
+                {
+                    "name": "newValidators",
+                    "type": {
+                        "vec": "pubkey"
+                    }
+                },
+                {
+                    "name": "validatorsRequired",
+                    "type": "u8"
+                }
+            ]
+        }
+    ],
+    "accounts": [
+        {
+            "name": "NetworkConfig",
+            "discriminator": [
+                94,
+                196,
+                151,
+                231,
+                223,
+                121,
+                86,
+                163
+            ]
+        },
+        {
+            "name": "TargetAccount",
+            "discriminator": [
+                140,
+                246,
+                247,
+                200,
+                198,
+                220,
+                24,
+                250
+            ]
+        },
+        {
+            "name": "MinerAccount",
+            "discriminator": [
+                232,
+                196,
+                79,
+                139,
+                222,
+                213,
+                161,
+                99
+            ]
+        },
+        {
+            "name": "JobAssignment",
+            "discriminator": [
+                33,
+                158,
+                19,
+                19,
+                99,
+                106,
+                207,
+                199
+            ]
+        },
+        {
+            "name": "ResultSubmission",
+            "discriminator": [
+                214,
+                115,
+                165,
+                103,
+                67,
+                211,
+                47,
+                88
+            ]
+        },
+        {
+            "name": "ValidationRecord",
+            "discriminator": [
+                237,
+                185,
+                26,
+                62,
+                250,
+                28,
+                178,
+                215
+            ]
+        },
+        {
+            "name": "WeeklyLeaderboard",
+            "discriminator": [
+                112,
+                136,
+                1,
+                92,
+                43,
+                158,
+                221,
+                13
+            ]
+        }
+    ],
+    "errors": [
+        {
+            "code": 6000,
+            "name": "Unauthorized",
+            "msg": "Unauthorized"
+        },
+        {
+            "code": 6001,
+            "name": "NotAValidator",
+            "msg": "Signer is not a registered validator."
+        },
+        {
+            "code": 6002,
+            "name": "SupplyCapExceeded",
+            "msg": "Supply cap exceeded"
+        },
+        {
+            "code": 6003,
+            "name": "InvalidAffinityScore",
+            "msg": "Affinity score must be negative"
+        },
+        {
+            "code": 6004,
+            "name": "TargetInactive",
+            "msg": "Target is not active"
+        },
+        {
+            "code": 6005,
+            "name": "JobAlreadyFulfilled",
+            "msg": "Job already fulfilled"
+        },
+        {
+            "code": 6006,
+            "name": "ResultAlreadyFinalized",
+            "msg": "Result already finalized"
+        },
+        {
+            "code": 6007,
+            "name": "RewardAlreadyMinted",
+            "msg": "Reward already minted"
+        },
+        {
+            "code": 6008,
+            "name": "ResultNotConfirmed",
+            "msg": "Result is not yet confirmed \u2014 cannot mint reward."
+        },
+        {
+            "code": 6009,
+            "name": "WeekNotClosed",
+            "msg": "Week not yet closed"
+        },
+        {
+            "code": 6010,
+            "name": "NotLeader",
+            "msg": "Not the weekly leader"
+        },
+        {
+            "code": 6011,
+            "name": "BonusAlreadyMinted",
+            "msg": "Bonus already minted"
+        },
+        {
+            "code": 6012,
+            "name": "EpochNotReady",
+            "msg": "Epoch not ready to advance"
+        }
+    ],
+    "types": [
+        {
+            "name": "NetworkConfig",
+            "type": {
+                "kind": "struct",
+                "fields": [
+                    {
+                        "name": "authority",
+                        "type": "pubkey"
+                    },
+                    {
+                        "name": "life_mint",
+                        "type": "pubkey"
+                    },
+                    {
+                        "name": "supply_cap",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "total_minted",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "current_epoch",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "epoch_start_slot",
+                        "type": "i64"
+                    },
+                    {
+                        "name": "epoch_duration_slots",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "validators_required",
+                        "type": "u8"
+                    },
+                    {
+                        "name": "validation_tolerance",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "validators",
+                        "type": {
+                            "array": [
+                                "pubkey",
+                                5
+                            ]
+                        }
+                    },
+                    {
+                        "name": "validator_count",
+                        "type": "u8"
+                    },
+                    {
+                        "name": "bump",
+                        "type": "u8"
+                    },
+                    {
+                        "name": "mint_authority_bump",
+                        "type": "u8"
+                    },
+                    {
+                        "name": "total_miners_registered",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "total_validators_registered",
+                        "type": "u64"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "TargetAccount",
+            "type": {
+                "kind": "struct",
+                "fields": [
+                    {
+                        "name": "target_id",
+                        "type": "u16"
+                    },
+                    {
+                        "name": "uniprot_id",
+                        "type": {
+                            "array": [
+                                "u8",
+                                10
+                            ]
+                        }
+                    },
+                    {
+                        "name": "difficulty",
+                        "type": {
+                            "defined": {
+                                "name": "DifficultyTier"
+                            }
+                        }
+                    },
+                    {
+                        "name": "is_active",
+                        "type": "bool"
+                    },
+                    {
+                        "name": "best_score_this_week",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "best_scorer_this_week",
+                        "type": "pubkey"
+                    },
+                    {
+                        "name": "week_number",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "hit_count",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "bump",
+                        "type": "u8"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "MinerAccount",
+            "type": {
+                "kind": "struct",
+                "fields": [
+                    {
+                        "name": "owner",
+                        "type": "pubkey"
+                    },
+                    {
+                        "name": "total_life_earned",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "molecules_screened",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "last_epoch",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "is_registered",
+                        "type": "bool"
+                    },
+                    {
+                        "name": "bump",
+                        "type": "u8"
+                    },
+                    {
+                        "name": "submission_count",
+                        "type": "u8"
+                    },
+                    {
+                        "name": "submission_epoch",
+                        "type": "u64"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "JobAssignment",
+            "type": {
+                "kind": "struct",
+                "fields": [
+                    {
+                        "name": "miner",
+                        "type": "pubkey"
+                    },
+                    {
+                        "name": "target_id",
+                        "type": "u16"
+                    },
+                    {
+                        "name": "seq",
+                        "type": "u8"
+                    },
+                    {
+                        "name": "epoch",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "assigned_slot",
+                        "type": "i64"
+                    },
+                    {
+                        "name": "is_fulfilled",
+                        "type": "bool"
+                    },
+                    {
+                        "name": "bump",
+                        "type": "u8"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "ResultSubmission",
+            "type": {
+                "kind": "struct",
+                "fields": [
+                    {
+                        "name": "miner",
+                        "type": "pubkey"
+                    },
+                    {
+                        "name": "target_id",
+                        "type": "u16"
+                    },
+                    {
+                        "name": "epoch",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "smiles",
+                        "type": {
+                            "array": [
+                                "u8",
+                                512
+                            ]
+                        }
+                    },
+                    {
+                        "name": "smiles_len",
+                        "type": "u16"
+                    },
+                    {
+                        "name": "claimed_affinity",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "submitted_slot",
+                        "type": "i64"
+                    },
+                    {
+                        "name": "status",
+                        "type": {
+                            "defined": {
+                                "name": "ResultStatus"
+                            }
+                        }
+                    },
+                    {
+                        "name": "validation_count",
+                        "type": "u8"
+                    },
+                    {
+                        "name": "validation_score_sum",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "validator_list",
+                        "type": {
+                            "array": [
+                                "pubkey",
+                                5
+                            ]
+                        }
+                    },
+                    {
+                        "name": "reward_minted",
+                        "type": "bool"
+                    },
+                    {
+                        "name": "confirmed_count",
+                        "type": "u8"
+                    },
+                    {
+                        "name": "confirming_validator_list",
+                        "type": {
+                            "array": [
+                                "pubkey",
+                                5
+                            ]
+                        }
+                    },
+                    {
+                        "name": "confirming_validator_count",
+                        "type": "u8"
+                    },
+                    {
+                        "name": "bump",
+                        "type": "u8"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "ValidationRecord",
+            "type": {
+                "kind": "struct",
+                "fields": [
+                    {
+                        "name": "validator",
+                        "type": "pubkey"
+                    },
+                    {
+                        "name": "result_pda",
+                        "type": "pubkey"
+                    },
+                    {
+                        "name": "rescored_affinity",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "is_confirmed",
+                        "type": "bool"
+                    },
+                    {
+                        "name": "validated_slot",
+                        "type": "i64"
+                    },
+                    {
+                        "name": "bump",
+                        "type": "u8"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "WeeklyLeaderboard",
+            "type": {
+                "kind": "struct",
+                "fields": [
+                    {
+                        "name": "week",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "target_id",
+                        "type": "u16"
+                    },
+                    {
+                        "name": "leader_miner",
+                        "type": "pubkey"
+                    },
+                    {
+                        "name": "leader_score",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "bonus_minted",
+                        "type": "bool"
+                    },
+                    {
+                        "name": "bump",
+                        "type": "u8"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "DifficultyTier",
+            "type": {
+                "kind": "enum",
+                "variants": [
+                    {
+                        "name": "Easy"
+                    },
+                    {
+                        "name": "Medium"
+                    },
+                    {
+                        "name": "Hard"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "ResultStatus",
+            "type": {
+                "kind": "enum",
+                "variants": [
+                    {
+                        "name": "Pending"
+                    },
+                    {
+                        "name": "Validating"
+                    },
+                    {
+                        "name": "Confirmed"
+                    },
+                    {
+                        "name": "Rejected"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "ValidatorAccount",
+            "type": {
+                "kind": "struct",
+                "fields": [
+                    {
+                        "name": "validator",
+                        "type": "pubkey"
+                    },
+                    {
+                        "name": "total_validations",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "confirmations",
+                        "type": "u64"
+                    },
+                    {
+                        "name": "reputation_bps",
+                        "type": "u16"
+                    },
+                    {
+                        "name": "last_active_slot",
+                        "type": "i64"
+                    },
+                    {
+                        "name": "is_active",
+                        "type": "bool"
+                    },
+                    {
+                        "name": "bump",
+                        "type": "u8"
+                    }
+                ]
+            }
+        }
+    ]
+}
