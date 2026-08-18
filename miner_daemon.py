@@ -1019,7 +1019,8 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
 
         # Update per-GPU shared stats key
         life_delta = 0.0
-        if hit and affinity is not None and TARGET_ID_MAP.get(tid) is not None:
+        if hit and affinity is not None and affinity < 0.0 and TARGET_ID_MAP.get(tid) is not None:
+            wlog.info(f"  SUBMIT affinity={affinity:.4f} kcal/mol  boltz_score={boltz_score}  target={tid}")
             resp = submit_on_chain(TARGET_ID_MAP[tid], mol, affinity, boltz_seed_used)
             if resp and resp.get("status") == "submitted":
                 tx_sig = resp.get("signature", "")
@@ -1368,8 +1369,8 @@ def main():
 
         # ── On-chain submission ───────────────────────────────────────────────
         tx_sig = None
-        if hit and affinity is not None and tid in TARGET_ID_MAP:
-            log.info(f"  HIT — submitting to devnet program {PROGRAM_ID}...")
+        if hit and affinity is not None and affinity < 0.0 and tid in TARGET_ID_MAP:
+            log.info(f"  HIT — submitting affinity={affinity:.4f} kcal/mol  boltz_score={boltz_score}  target={tid}  program={PROGRAM_ID}")
             # ChEMBL novelty cross-reference (non-fatal)
             chembl_result: dict = {}
             if _TOOLS_AVAILABLE:
