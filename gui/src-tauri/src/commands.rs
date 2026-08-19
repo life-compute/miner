@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use sysinfo::System;
-use tauri::Window;
+use tauri::{Emitter, Window};
 
 // ─── System check ──────────────────────────────────────────────────────────
 
