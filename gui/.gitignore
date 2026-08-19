@@ -1,0 +1,6 @@
+node_modules/
+dist/
+src-tauri/target/
+*.lock
+yarn-error.log
+.DS_Store
