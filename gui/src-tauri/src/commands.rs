@@ -192,7 +192,7 @@ struct InstallProgressPayload {
 }
 
 macro_rules! emit_progress {
-    ($win:expr, $step:expr, $status:expr, $pct:expr, $msg:expr) => {
+    ($win:expr, $step:expr, $status:expr, $pct:expr, $msg:expr) => {{
         let _ = $win.emit(
             "install_progress",
             InstallProgressPayload {
@@ -202,7 +202,7 @@ macro_rules! emit_progress {
                 message: $msg.to_string(),
             },
         );
-    };
+    }};
 }
 
 #[tauri::command]
