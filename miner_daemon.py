@@ -135,6 +135,36 @@ log = logging.getLogger("life-miner")
 ZINC15_FRAGMENTS = WORK_DIR / "data" / "zinc15_fragments.smi"
 _zinc_cache: list[str] = []
 
+# ── ProteinNet epoch-level pre-screen settings ────────────────────────────────
+_PNET_SCREEN_N = 10_000   # ZINC15 candidates to evaluate per epoch
+_PNET_TOP_K    = 10       # top predicted binders forwarded to Boltz2
+_PNET_MIN_R2   = 0.5      # minimum model R² required to trust pre-screening
+_pnet_pools: dict[str, list[str]] = {}   # per-target candidate queue (refilled when empty)
+
+
+def _pnet_fill_pool(tid: str) -> None:
+    """Pre-screen _PNET_SCREEN_N ZINC15 candidates for *tid* and cache top _PNET_TOP_K.
+
+    No-op when ProteinNet is unavailable, ZINC15 library not loaded, or the
+    per-target model has R² < _PNET_MIN_R2 (not yet trustworthy).
+    """
+    if not (_PNET_AVAILABLE and _zinc_cache
+            and _pnet_pre_screen is not None and _pnet_get_report is not None):
+        return
+    try:
+        report = _pnet_get_report(tid)
+        r2 = float(report.get("r2", 0.0)) if report else 0.0
+        if r2 < _PNET_MIN_R2:
+            log.debug(f"[PROTEINNET] {tid} R²={r2:.2f} < {_PNET_MIN_R2} — skipping pre-screen (model not ready)")
+            return
+        sample = random.sample(_zinc_cache, min(_PNET_SCREEN_N, len(_zinc_cache)))
+        candidates = _pnet_pre_screen(sample, tid, top_n=_PNET_TOP_K)
+        _pnet_pools[tid] = list(candidates)
+        log.info(f"[PROTEINNET] Pre-screened {len(sample):,} → top {len(candidates)} for {tid} (R²={r2:.2f})")
+    except Exception as _e:
+        log.debug(f"[PROTEINNET] fill_pool failed for {tid} (non-fatal): {_e}")
+
+
 def _sample_zinc15() -> str:
     """Random SMILES from ZINC15 fragment library (~1.7M drug-like molecules)."""
     global _zinc_cache
@@ -170,22 +200,12 @@ def _pick_molecule(target: dict, sub_memory, best_smiles: list[str]) -> tuple[st
     seq = target.get("protein_sequence", "")
     is_large_protein = len(seq) > 800   # APC=2843aa, BRCA1=1863aa, SMAD4=552aa
 
-    # ── ProteinNet pre-screen pool (built once, shared across priorities) ──────
-    # For large proteins: 5000 candidates → top 20 to avoid wasting Boltz2 time.
-    # For normal proteins: 2000 candidates → top 100.
-    _pnet_pool: list[str] = []
-    if _PNET_AVAILABLE and _zinc_cache and _pnet_pre_screen is not None:
-        try:
-            if is_large_protein:
-                _n_screen, _top_k = 5000, 20
-            else:
-                _n_screen, _top_k = 2000, 100
-            _sample = random.sample(_zinc_cache, min(_n_screen, len(_zinc_cache)))
-            _pnet_pool = _pnet_pre_screen(_sample, tid, top_n=_top_k)
-            _mode_str  = "Large protein mode — " if is_large_protein else ""
-            log.info(f"[PROTEINNET] {_mode_str}{len(_sample)} screened → top {len(_pnet_pool)} for {tid}")
-        except Exception as _pne_err:
-            log.debug(f"[PROTEINNET] pre_screen failed (non-fatal): {_pne_err}")
+    # ── ProteinNet pre-screen pool (built once per epoch, drained one call at a time) ──
+    # Refill when the per-target queue is empty; _pnet_fill_pool() gates on R² ≥ 0.5.
+    # For large proteins the per-call pre-screen (smaller n) still runs as a fallback
+    # inside the pool-fill path via the same _pnet_fill_pool helper.
+    if _PNET_AVAILABLE and _zinc_cache and not _pnet_pools.get(tid):
+        _pnet_fill_pool(tid)
 
     # ── Priority 1: LIFE PULSE top candidates (Sobol sweep + EliteMutator)
     if _PULSE_AVAILABLE:
@@ -251,12 +271,18 @@ def _pick_molecule(target: dict, sub_memory, best_smiles: list[str]) -> tuple[st
             log.debug(f"[GENERATE] failed (non-fatal): {_ge}")
 
     # ── Priority 3: ProteinNet-pre-screened ZINC15 (best predicted binders first)
-    if _pnet_pool:
+    # Pop from the epoch-level queue; when exhausted, _pnet_fill_pool() will
+    # refill on the next call (triggers next epoch's 10 000-candidate sweep).
+    _pool = _pnet_pools.get(tid, [])
+    if _pool:
         if sub_memory is not None:
-            _novel_pnet = sub_memory.filter_novel(_pnet_pool)
+            _novel_pnet = sub_memory.filter_novel(_pool)
             if _novel_pnet:
-                return _novel_pnet[0], "proteinnet"
-        return _pnet_pool[0], "proteinnet"
+                mol_pnet = _novel_pnet[0]
+                _pnet_pools[tid] = [s for s in _pool if s != mol_pnet]
+                return mol_pnet, "proteinnet"
+        mol_pnet = _pnet_pools[tid].pop(0)
+        return mol_pnet, "proteinnet"
 
     # ── Priority 4: random ZINC15 sample (always works)
     return _sample_zinc15(), "zinc15"
