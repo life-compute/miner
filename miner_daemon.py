@@ -1018,21 +1018,18 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
             wlog.debug(f"JSONL write failed: {_je}")
 
         # Update per-GPU shared stats key
-        # Reference compounds (is_ref=True / source="reference") must never be submitted
-        # on-chain — they calibrate the effective threshold only. Only zinc15, mutant,
-        # and generate molecules are eligible for $LIFE rewards.
+        # Reward policy:
+        #   ref compounds  → submit on hit, flat 1 $LIFE (logged as [REF-SUBMIT])
+        #   novel molecules → full tier rewards: Easy=1, Medium=5, Hard=25 $LIFE
+        # The on-chain program determines actual reward; local tracking mirrors it.
         life_delta = 0.0
-        if is_ref and hit:
-            wlog.info(
-                "  HIT (reference compound) — skipping on-chain submission. "
-                "Reference compounds are for threshold calibration only."
-            )
-        if hit and affinity is not None and TARGET_ID_MAP.get(tid) is not None and not is_ref:
+        if hit and affinity is not None and TARGET_ID_MAP.get(tid) is not None:
+            if is_ref:
+                wlog.info("  [REF-SUBMIT] HIT (reference compound) — submitting on-chain (flat 1 $LIFE)")
             resp = submit_on_chain(TARGET_ID_MAP[tid], mol, affinity, boltz_seed_used)
             if resp and resp.get("status") == "submitted":
                 tx_sig = resp.get("signature", "")
-                tier_reward = {1: 1.0, 2: 5.0, 3: 25.0}.get(target.get("difficulty_tier", 1), 1.0)
-                life_delta = tier_reward
+                life_delta = 1.0 if is_ref else {1: 1.0, 2: 5.0, 3: 25.0}.get(target.get("difficulty_tier", 1), 1.0)
                 wlog.info(f"  ✔ tx: {tx_sig}")
 
         # Accumulate into shared manager dict
@@ -1375,21 +1372,19 @@ def main():
                     log.debug(f"[PULSE] record_boltz failed (non-fatal): {_pbe}")
 
         # ── On-chain submission ───────────────────────────────────────────────
-        # Reference compounds (source="ref") are used only for threshold calibration.
-        # They must never be submitted on-chain — only zinc15, mutant, and generate
-        # molecules are eligible for $LIFE rewards.
+        # Reward policy:
+        #   ref compounds  → submit on hit, flat 1 $LIFE (logged as [REF-SUBMIT])
+        #   novel molecules → full tier rewards: Easy=1, Medium=5, Hard=25 $LIFE
+        # The on-chain program determines actual reward; local tracking mirrors it.
         tx_sig = None
-        if is_ref and hit:
-            log.info(
-                "  HIT (reference compound) — skipping on-chain submission. "
-                "Reference compounds calibrate the threshold only; "
-                "only zinc15/mutant/generate molecules earn $LIFE rewards."
-            )
-        if hit and affinity is not None and tid in TARGET_ID_MAP and not is_ref:
-            log.info(f"  HIT — submitting to devnet program {PROGRAM_ID}...")
-            # ChEMBL novelty cross-reference (non-fatal)
+        if hit and affinity is not None and tid in TARGET_ID_MAP:
+            if is_ref:
+                log.info("  [REF-SUBMIT] HIT (reference compound) — submitting on-chain (flat 1 $LIFE)")
+            else:
+                log.info(f"  HIT — submitting to devnet program {PROGRAM_ID}...")
+            # ChEMBL novelty cross-reference (non-fatal, novel molecules only)
             chembl_result: dict = {}
-            if _TOOLS_AVAILABLE:
+            if _TOOLS_AVAILABLE and not is_ref:
                 try:
                     chembl_result = validate_against_chembl(mol, uid)
                     log.info(f"  [ChEMBL] novel={chembl_result.get('is_novel')}  "
@@ -1402,12 +1397,12 @@ def main():
             if resp and resp.get("tx"):
                 tx_sig = resp["tx"]
                 # Tier-based reward tracking (mirrors Rust DifficultyTier::base_reward_raw):
+                #   ref compound    =   1 LIFE (flat)
                 #   tier 1 (easy)   =   1 LIFE
                 #   tier 2 (medium) =   5 LIFE
                 #   tier 3 (hard)   =  25 LIFE
                 #   unknown         =   1 LIFE (conservative fallback)
-                _tier = target.get("difficulty_tier", 1)
-                _tier_reward = {1: 1.0, 2: 5.0, 3: 25.0}.get(_tier, 1.0)
+                _tier_reward = 1.0 if is_ref else {1: 1.0, 2: 5.0, 3: 25.0}.get(target.get("difficulty_tier", 1), 1.0)
                 life_earned += _tier_reward
                 log.info(f"  ✔ tx: {tx_sig}")
                 log.info(f"  Explorer: https://explorer.solana.com/tx/{tx_sig}?cluster=devnet")
