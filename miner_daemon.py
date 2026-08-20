@@ -1018,8 +1018,16 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
             wlog.debug(f"JSONL write failed: {_je}")
 
         # Update per-GPU shared stats key
+        # Reference compounds (is_ref=True / source="reference") must never be submitted
+        # on-chain — they calibrate the effective threshold only. Only zinc15, mutant,
+        # and generate molecules are eligible for $LIFE rewards.
         life_delta = 0.0
-        if hit and affinity is not None and TARGET_ID_MAP.get(tid) is not None:
+        if is_ref and hit:
+            wlog.info(
+                "  HIT (reference compound) — skipping on-chain submission. "
+                "Reference compounds are for threshold calibration only."
+            )
+        if hit and affinity is not None and TARGET_ID_MAP.get(tid) is not None and not is_ref:
             resp = submit_on_chain(TARGET_ID_MAP[tid], mol, affinity, boltz_seed_used)
             if resp and resp.get("status") == "submitted":
                 tx_sig = resp.get("signature", "")
@@ -1367,8 +1375,17 @@ def main():
                     log.debug(f"[PULSE] record_boltz failed (non-fatal): {_pbe}")
 
         # ── On-chain submission ───────────────────────────────────────────────
+        # Reference compounds (source="ref") are used only for threshold calibration.
+        # They must never be submitted on-chain — only zinc15, mutant, and generate
+        # molecules are eligible for $LIFE rewards.
         tx_sig = None
-        if hit and affinity is not None and tid in TARGET_ID_MAP:
+        if is_ref and hit:
+            log.info(
+                "  HIT (reference compound) — skipping on-chain submission. "
+                "Reference compounds calibrate the threshold only; "
+                "only zinc15/mutant/generate molecules earn $LIFE rewards."
+            )
+        if hit and affinity is not None and tid in TARGET_ID_MAP and not is_ref:
             log.info(f"  HIT — submitting to devnet program {PROGRAM_ID}...")
             # ChEMBL novelty cross-reference (non-fatal)
             chembl_result: dict = {}
