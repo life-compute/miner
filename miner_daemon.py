@@ -1045,17 +1045,17 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
 
         # Update per-GPU shared stats key
         # Reward policy:
-        #   ref compounds  → submit on hit, flat 1 $LIFE (logged as [REF-SUBMIT])
+        #   ref compounds  → submit on hit, flat 5 $LIFE (logged as [REF-SUBMIT])
         #   novel molecules → full tier rewards: Easy=1, Medium=5, Hard=25 $LIFE
         # The on-chain program determines actual reward; local tracking mirrors it.
         life_delta = 0.0
         if hit and affinity is not None and TARGET_ID_MAP.get(tid) is not None:
             if is_ref:
-                wlog.info("  [REF-SUBMIT] HIT (reference compound) — submitting on-chain (flat 1 $LIFE)")
+                wlog.info("  [REF-SUBMIT] HIT (reference compound) — submitting on-chain (flat 5 $LIFE)")
             resp = submit_on_chain(TARGET_ID_MAP[tid], mol, affinity, boltz_seed_used)
             if resp and resp.get("status") == "submitted":
                 tx_sig = resp.get("signature", "")
-                life_delta = 1.0 if is_ref else {1: 1.0, 2: 5.0, 3: 25.0}.get(target.get("difficulty_tier", 1), 1.0)
+                life_delta = 5.0 if is_ref else {1: 1.0, 2: 5.0, 3: 25.0}.get(target.get("difficulty_tier", 1), 1.0)
                 wlog.info(f"  ✔ tx: {tx_sig}")
 
         # Accumulate into shared manager dict
@@ -1399,13 +1399,13 @@ def main():
 
         # ── On-chain submission ───────────────────────────────────────────────
         # Reward policy:
-        #   ref compounds  → submit on hit, flat 1 $LIFE (logged as [REF-SUBMIT])
+        #   ref compounds  → submit on hit, flat 5 $LIFE (logged as [REF-SUBMIT])
         #   novel molecules → full tier rewards: Easy=1, Medium=5, Hard=25 $LIFE
         # The on-chain program determines actual reward; local tracking mirrors it.
         tx_sig = None
         if hit and affinity is not None and tid in TARGET_ID_MAP:
             if is_ref:
-                log.info("  [REF-SUBMIT] HIT (reference compound) — submitting on-chain (flat 1 $LIFE)")
+                log.info("  [REF-SUBMIT] HIT (reference compound) — submitting on-chain (flat 5 $LIFE)")
             else:
                 log.info(f"  HIT — submitting to devnet program {PROGRAM_ID}...")
             # ChEMBL novelty cross-reference (non-fatal, novel molecules only)
@@ -1423,12 +1423,12 @@ def main():
             if resp and resp.get("tx"):
                 tx_sig = resp["tx"]
                 # Tier-based reward tracking (mirrors Rust DifficultyTier::base_reward_raw):
-                #   ref compound    =   1 LIFE (flat)
+                #   ref compound    =   5 LIFE (flat, any tier)
                 #   tier 1 (easy)   =   1 LIFE
                 #   tier 2 (medium) =   5 LIFE
                 #   tier 3 (hard)   =  25 LIFE
                 #   unknown         =   1 LIFE (conservative fallback)
-                _tier_reward = 1.0 if is_ref else {1: 1.0, 2: 5.0, 3: 25.0}.get(target.get("difficulty_tier", 1), 1.0)
+                _tier_reward = 5.0 if is_ref else {1: 1.0, 2: 5.0, 3: 25.0}.get(target.get("difficulty_tier", 1), 1.0)
                 life_earned += _tier_reward
                 log.info(f"  ✔ tx: {tx_sig}")
                 log.info(f"  Explorer: https://explorer.solana.com/tx/{tx_sig}?cluster=devnet")
