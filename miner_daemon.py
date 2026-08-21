@@ -962,12 +962,30 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
     sub_memory = SubmissionMemory() if _TOOLS_AVAILABLE else None  # type: ignore[possibly-unbound]
 
     TARGET_ID_MAP = {
+        # ── Protein targets (on-chain IDs 0-29) ──────────────────────────────
         "TP53":   0, "BRCA1":  1, "EGFR":   2, "HER2":   3, "KRAS":   4,
         "BCL2":   5, "CDK4":   6, "VEGFR2": 7, "PDL1":   8, "MDM2":   9,
         "BRAF":  10, "PTEN":  11, "MYC":   12, "STAT3": 13, "PIK3CA": 14,
         "MTOR":  15, "FGFR1": 16, "RET":   17, "AR":    18, "NTRK1":  19,
         "IDH1":  20, "FLT3":  21, "SMAD4": 22, "APC":   23, "PARP1":  24,
         "JAK2":  25, "ESR1":  26, "HDAC1": 27, "HDAC2": 28, "ABL1":   29,
+        # ── mRNA targets (on-chain IDs 30-59, pending MAX_TARGETS ≥ 60) ──────
+        # Oncogene silencing
+        "MYC_mRNA":      30, "KRAS_mRNA":    31, "BCL2_mRNA":  32,
+        "EGFR_mRNA":     33, "HER2_mRNA":    34, "BRAF_mRNA":  35,
+        "MDM2_mRNA":     36, "CDK4_mRNA":    37, "CCND1_mRNA": 38,
+        "SURVIVIN_mRNA": 39,
+        # Tumor microenvironment
+        "PDL1_mRNA":   40, "VEGF_mRNA":  41, "HIF1A_mRNA": 42,
+        "IL6_mRNA":    43, "TNF_mRNA":   44, "TGFb1_mRNA": 45,
+        "CSF1R_mRNA":  46, "CCL2_mRNA":  47, "CXCL12_mRNA":48,
+        "MMP9_mRNA":   49,
+        # Cancer metabolism
+        "LDHA_mRNA":  50, "PKM2_mRNA":  51, "GLUT1_mRNA": 52,
+        "HK2_mRNA":   53, "FASN_mRNA":  54,
+        # DNA repair / immortality
+        "TERT_mRNA":  55, "PARP1_mRNA": 56, "RAD51_mRNA": 57,
+        "BRCA2_mRNA": 58, "ATM_mRNA":   59,
     }
 
     # Offset target index so GPUs work different targets simultaneously
@@ -1268,10 +1286,11 @@ def main():
 
     # On-chain target ID map — index matches the on-chain TargetAccount target_id field.
     # Targets 0-9 are registered on devnet (MAX_TARGETS=10).
-    # Targets 10-29 are in targets.json but pending on-chain registration (MAX_TARGETS
-    # must be raised to ≥30 and register_target called for each before hits can be
-    # submitted).  All 30 are screened every cycle; submission is gated at line ~477.
+    # Targets 10-29 are protein targets pending on-chain registration (MAX_TARGETS ≥ 30).
+    # Targets 30-59 are mRNA targets pending MAX_TARGETS ≥ 60 and register_target calls.
+    # All 60 targets are screened every cycle; on-chain submission is gated below.
     TARGET_ID_MAP = {
+        # ── Protein targets (on-chain IDs 0-29) ──────────────────────────────
         "TP53":   0, "BRCA1":  1, "EGFR":   2, "HER2":   3, "KRAS":   4,
         "BCL2":   5, "CDK4":   6, "VEGFR2": 7, "PDL1":   8, "MDM2":   9,
         # ── pending on-chain registration (MAX_TARGETS ≥ 30 required) ──────────
@@ -1279,6 +1298,23 @@ def main():
         "MTOR":  15, "FGFR1": 16, "RET":   17, "AR":    18, "NTRK1":  19,
         "IDH1":  20, "FLT3":  21, "SMAD4": 22, "APC":   23, "PARP1":  24,
         "JAK2":  25, "ESR1":  26, "HDAC1": 27, "HDAC2": 28, "ABL1":   29,
+        # ── mRNA targets (on-chain IDs 30-59, pending MAX_TARGETS ≥ 60) ──────
+        # Oncogene silencing
+        "MYC_mRNA":      30, "KRAS_mRNA":    31, "BCL2_mRNA":  32,
+        "EGFR_mRNA":     33, "HER2_mRNA":    34, "BRAF_mRNA":  35,
+        "MDM2_mRNA":     36, "CDK4_mRNA":    37, "CCND1_mRNA": 38,
+        "SURVIVIN_mRNA": 39,
+        # Tumor microenvironment
+        "PDL1_mRNA":   40, "VEGF_mRNA":  41, "HIF1A_mRNA": 42,
+        "IL6_mRNA":    43, "TNF_mRNA":   44, "TGFb1_mRNA": 45,
+        "CSF1R_mRNA":  46, "CCL2_mRNA":  47, "CXCL12_mRNA":48,
+        "MMP9_mRNA":   49,
+        # Cancer metabolism
+        "LDHA_mRNA":  50, "PKM2_mRNA":  51, "GLUT1_mRNA": 52,
+        "HK2_mRNA":   53, "FASN_mRNA":  54,
+        # DNA repair / immortality
+        "TERT_mRNA":  55, "PARP1_mRNA": 56, "RAD51_mRNA": 57,
+        "BRCA2_mRNA": 58, "ATM_mRNA":   59,
     }
 
     # Round-robin index — rotates through all fetched targets regardless of
@@ -1340,8 +1376,10 @@ def main():
                 log.warning(f"[PICK] molecule selection failed ({_pe}) — ZINC15 fallback")
                 mol, source = _sample_zinc15(), "zinc15-fallback"
 
-        is_ref = (source == "ref")
-        log.info(f"Target: {tid} ({uid}) | tier {target.get('difficulty_tier','?')} "
+        is_ref    = (source == "ref")
+        is_mrna   = target.get("target_type") == "mRNA"
+        mrna_tag  = " [RNA]" if is_mrna else ""
+        log.info(f"Target: {tid}{mrna_tag} ({uid}) | tier {target.get('difficulty_tier','?')} "
                  f"| threshold {thresh} | MSA: {'local' if msa != 'empty' else 'empty'}")
         log.info(f"Molecule: {mol[:80]}  [{source}]")
         log.info("Running Boltz2 GPU scoring...")

@@ -765,14 +765,21 @@ function GpuWorkersPanel({ workers }) {
 
 /* ─── Cancer targets panel ──────────────────────────────────── */
 function TargetsPanel({ targets }) {
-  const GENES = ['TP53', 'BRCA1', 'EGFR', 'HER2', 'KRAS', 'BCL2', 'CDK4', 'VEGFR2', 'PDL1', 'MDM2']
+  const protein = targets.filter(t => !t.endsWith('_mRNA'))
+  const mrna    = targets.filter(t => t.endsWith('_mRNA'))
+  const PROTEIN_GENES = ['TP53', 'BRCA1', 'EGFR', 'HER2', 'KRAS', 'BCL2', 'CDK4', 'VEGFR2', 'PDL1', 'MDM2']
+  const MRNA_GENES    = ['MYC_mRNA', 'KRAS_mRNA', 'BCL2_mRNA', 'TERT_mRNA', 'PDL1_mRNA']
   return (
     <Panel accent={T.cyan}>
       <div style={S.panelTitle}>
         <span style={S.titleAccent(T.cyan)}>⬡</span>
-        <span>ACTIVE PROTEIN TARGETS</span>
-        <span style={{ marginLeft: 'auto', color: T.cyan, textShadow: glow(T.cyan, 3),
-                        fontWeight: 700 }}>{targets.length}</span>
+        <span>ACTIVE TARGETS</span>
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <span style={{ color: T.cyan, fontSize: '10px', opacity: 0.8 }}>PROTEIN</span>
+          <span style={{ color: T.cyan, fontWeight: 700, textShadow: glow(T.cyan, 3) }}>{protein.length}</span>
+          <span style={{ color: '#ff9f43', fontSize: '10px', opacity: 0.8 }}>RNA</span>
+          <span style={{ color: '#ff9f43', fontWeight: 700, textShadow: glow('#ff9f43', 3) }}>{mrna.length}</span>
+        </span>
       </div>
       {targets.length === 0 ? (
         <div style={{ ...S.label, padding: '8px 0' }}>
@@ -780,18 +787,40 @@ function TargetsPanel({ targets }) {
           <span style={{ animation: 'blink 1s step-end infinite', color: T.green }}> █</span>
         </div>
       ) : (
-        targets.map((t, i) => (
-          <div key={i} style={S.targetItem}>
-            <div style={S.targetPip} />
-            <span style={{ color: T.cyan, fontWeight: 700, textShadow: glow(T.cyan, 2) }}>{t}</span>
-            <span style={{ marginLeft: 'auto', ...S.pill(T.green) }}>ACTIVE</span>
-          </div>
-        ))
+        <>
+          {protein.map((t, i) => (
+            <div key={i} style={S.targetItem}>
+              <div style={S.targetPip} />
+              <span style={{ color: T.cyan, fontWeight: 700, textShadow: glow(T.cyan, 2) }}>{t}</span>
+              <span style={{ marginLeft: 'auto', ...S.pill(T.green) }}>ACTIVE</span>
+            </div>
+          ))}
+          {mrna.map((t, i) => (
+            <div key={'m'+i} style={{ ...S.targetItem, borderColor: '#ff9f4340' }}>
+              <div style={{ ...S.targetPip, background: '#ff9f43', boxShadow: '0 0 6px #ff9f43' }} />
+              <span style={{ color: '#ff9f43', fontWeight: 700, textShadow: glow('#ff9f43', 2) }}>{t}</span>
+              <span style={{ marginLeft: 'auto', fontSize: '9px', color: '#ff9f43', opacity: 0.85,
+                             border: '1px solid #ff9f4360', borderRadius: '3px', padding: '1px 5px',
+                             letterSpacing: '0.05em', fontFamily: T.mono }}>RNA</span>
+              <span style={{ ...S.pill(T.green) }}>ACTIVE</span>
+            </div>
+          ))}
+        </>
       )}
-      {GENES.filter(g => !targets.includes(g)).slice(0, 3).map((g, i) => (
+      {PROTEIN_GENES.filter(g => !targets.includes(g)).slice(0, 2).map((g, i) => (
         <div key={g} style={{ ...S.targetItem, opacity: 0.3, border: `1px solid ${T.border}` }}>
           <div style={{ ...S.targetPip, background: T.textDim, boxShadow: 'none', animation: 'none' }} />
           <span style={{ color: T.textDim }}>{g}</span>
+          <span style={{ marginLeft: 'auto', ...S.pill(T.textDim) }}>LOCKED</span>
+        </div>
+      ))}
+      {MRNA_GENES.filter(g => !targets.includes(g)).slice(0, 2).map((g, i) => (
+        <div key={g} style={{ ...S.targetItem, opacity: 0.25, border: `1px solid ${T.border}` }}>
+          <div style={{ ...S.targetPip, background: T.textDim, boxShadow: 'none', animation: 'none' }} />
+          <span style={{ color: T.textDim }}>{g}</span>
+          <span style={{ marginLeft: '6px', fontSize: '9px', color: T.textDim,
+                         border: '1px solid #ffffff20', borderRadius: '3px',
+                         padding: '1px 4px', fontFamily: T.mono }}>RNA</span>
           <span style={{ marginLeft: 'auto', ...S.pill(T.textDim) }}>LOCKED</span>
         </div>
       ))}
