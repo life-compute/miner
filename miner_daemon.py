@@ -1287,7 +1287,7 @@ def main():
     # On-chain target ID map — index matches the on-chain TargetAccount target_id field.
     # Targets 0-9 are registered on devnet (MAX_TARGETS=10).
     # Targets 10-29 are protein targets pending on-chain registration (MAX_TARGETS ≥ 30).
-    # Targets 30-59 are mRNA targets pending MAX_TARGETS ≥ 60 and register_target calls.
+    # Targets 2000-2029 are mRNA targets (MAX_TARGETS=2030, registered on-chain 2026-08-20).
     # All 60 targets are screened every cycle; on-chain submission is gated below.
     TARGET_ID_MAP = {
         # ── Protein targets (on-chain IDs 0-29) ──────────────────────────────
