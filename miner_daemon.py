@@ -118,6 +118,12 @@ STATS_PATH = WORK_DIR / "stats.json"
 ANCHOR_DIR = Path("/tmp/life-compute/core")
 IDL_PATH   = ANCHOR_DIR / "target/idl/life_core.json"
 
+# ── Discovery NFT ─────────────────────────────────────────────────────────────
+DISCOVERY_NFT_JS     = WORK_DIR / "scripts" / "mint_discovery_nft.js"
+DISCOVERY_REGISTRY   = WORK_DIR / "output" / "discoveries.json"
+DISCOVERY_FOUNDATION = "2jVdMx7fb88txbG6YoZzC7kT4Tq8rJDaWrNgbZ3ZnqCb"
+DISCOVERY_PERCENTILE = 0.10   # top-10% affinity for that target qualifies
+
 # ── Boltz2 / nova paths ───────────────────────────────────────────────────────
 NOVA_DIR   = Path("/mnt/minos-drive/nova_subnet")
 NOVA_VENV  = NOVA_DIR / ".venv" / "bin" / "python"
@@ -769,6 +775,178 @@ def submit_on_chain(target_id_num: int, smiles: str, affinity: float,
         return None
     except Exception as e:
         log.error(f"submit exception: {e}")
+        return None
+
+
+# ── Discovery NFT helpers ─────────────────────────────────────────────────────
+
+def _discovery_top10_threshold(target_id: str, current_affinity: float) -> bool:
+    """Return True if *current_affinity* is in the top-10% for *target_id*.
+
+    Reads from output/life_boltz_scores.jsonl (all historical scores for that
+    target, novel sources only).  Falls back to True when < 10 prior scores
+    exist (first few hits always qualify on novelty alone).
+    """
+    boltz_jsonl = WORK_DIR / "output" / "life_boltz_scores.jsonl"
+    scores: list[float] = []
+    try:
+        with boltz_jsonl.open() as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if row.get("target_id") != target_id:
+                    continue
+                if row.get("source") in ("ref", "reference"):
+                    continue
+                aff = row.get("affinity")
+                if isinstance(aff, (int, float)):
+                    scores.append(float(aff))
+    except FileNotFoundError:
+        pass
+
+    if len(scores) < 10:
+        # Too few historical data points — first hits always qualify
+        return True
+
+    scores.sort()  # ascending: most negative = best binder = lowest index
+    cutoff_idx = max(0, int(len(scores) * DISCOVERY_PERCENTILE) - 1)
+    threshold  = scores[cutoff_idx]
+    qualifies  = current_affinity <= threshold
+    log.info(f"  [DISCOVERY] top-10% gate: affinity={current_affinity:.3f} "
+             f"threshold={threshold:.3f} n={len(scores)} → {'PASS' if qualifies else 'FAIL'}")
+    return qualifies
+
+
+def _next_discovery_numbers(target_id: str, registry_path: Path) -> tuple[int, int]:
+    """Return (global_discovery_number, per_target_rank)."""
+    try:
+        if registry_path.exists():
+            reg = json.loads(registry_path.read_text())
+            global_n = len(reg.get("discoveries", [])) + 1
+            target_n = reg.get("target_counts", {}).get(target_id, 0) + 1
+            return global_n, target_n
+    except Exception:
+        pass
+    return 1, 1
+
+
+def _maybe_mint_discovery_nft(
+    smiles: str,
+    affinity: float,
+    target: dict,
+    miner_wallet: str,
+    validator_tx: str,
+    source: str,
+    auth_keypair_path: str,
+    rpc: str,
+    dry_run: bool = False,
+) -> dict | None:
+    """Evaluate discovery eligibility and mint an NFT if all rules pass.
+
+    Rules (all must be true):
+      1. source is 'zinc15', 'zinc15-fallback', 'mutant', 'generate', or 'pulse'
+         (not 'ref' / 'reference' — no reference compounds)
+      2. affinity is in the top-10% for this target (historical novel scores)
+      3. SMILES not already minted (checked inside the JS script)
+      4. mint_discovery_nft.js is present
+
+    Returns the parsed result dict from the script, or None on error/skip.
+    """
+    tid = target.get("id", "UNKNOWN")
+    uid = target.get("uniprot_id", "")
+    protein_name = target.get("protein_name", tid)
+
+    # Rule 1 — novel source only
+    novel_sources = {"zinc15", "zinc15-fallback", "mutant", "generate", "pulse"}
+    if source not in novel_sources:
+        log.debug(f"  [DISCOVERY] skipping — source '{source}' not novel")
+        return None
+
+    # Rule 2 — top-10% gate
+    if not _discovery_top10_threshold(tid, affinity):
+        return None
+
+    # Rule 3+4 — JS script exists
+    if not DISCOVERY_NFT_JS.exists():
+        log.warning("  [DISCOVERY] mint_discovery_nft.js not found — skipping NFT")
+        return None
+
+    global_n, target_rank = _next_discovery_numbers(tid, DISCOVERY_REGISTRY)
+    ts = datetime.now(timezone.utc).isoformat()
+
+    # Read the miner's public key from the keypair file (public-safe)
+    try:
+        _kp_data = json.loads(Path(auth_keypair_path).read_bytes())
+        from base58 import b58encode  # type: ignore
+        _pub = b58encode(bytes(_kp_data[32:64])).decode()
+    except Exception:
+        _pub = miner_wallet  # fallback to whatever was passed in
+
+    args = {
+        "rpc":              rpc,
+        "authKeypair":      auth_keypair_path,
+        "smiles":           smiles,
+        "affinity":         affinity,
+        "targetId":         tid,
+        "targetName":       protein_name,
+        "uniprotId":        uid,
+        "minerWallet":      _pub,
+        "validatorTx":      validator_tx,
+        "timestamp":        ts,
+        "discoveryRank":    target_rank,
+        "discoveryNumber":  global_n,
+        "foundationWallet": DISCOVERY_FOUNDATION,
+        "registryPath":     str(DISCOVERY_REGISTRY),
+        "dryRun":           dry_run,
+        "cluster":          "devnet" if "devnet" in rpc else "mainnet-beta",
+    }
+
+    log.info(f"  [DISCOVERY] 🧬 minting NFT — global #{global_n}, "
+             f"rank #{target_rank} for {tid}")
+    try:
+        _env = {**os.environ, "NODE_PATH": str(ANCHOR_DIR / "node_modules")}
+        result = subprocess.run(
+            ["node", str(DISCOVERY_NFT_JS), json.dumps(args)],
+            capture_output=True, text=True, timeout=180,
+            cwd=str(ANCHOR_DIR),
+            env=_env,
+        )
+        if result.stderr.strip():
+            log.debug(f"  [DISCOVERY] node stderr:\n{result.stderr.strip()[-1000:]}")
+
+        parsed = None
+        for line in reversed(result.stdout.strip().splitlines()):
+            try:
+                parsed = json.loads(line)
+                break
+            except Exception:
+                continue
+
+        if parsed:
+            status = parsed.get("status")
+            if status == "minted":
+                log.info(f"  [DISCOVERY] ✔ NFT minted: {parsed.get('nft_name')}")
+                log.info(f"  [DISCOVERY]   mint  : {parsed.get('mint_address')}")
+                log.info(f"  [DISCOVERY]   tx    : {parsed.get('mint_tx')}")
+                log.info(f"  [DISCOVERY]   {parsed.get('explorer')}")
+            elif status == "duplicate":
+                log.info(f"  [DISCOVERY] SMILES already minted — skipping")
+            elif status == "dry_run":
+                log.info(f"  [DISCOVERY] dry-run OK: {parsed.get('nft_name')}")
+            else:
+                log.warning(f"  [DISCOVERY] unexpected status: {parsed}")
+        else:
+            log.warning(f"  [DISCOVERY] no JSON in stdout (rc={result.returncode})")
+            log.debug(f"  stdout: {result.stdout[:500]}")
+
+        return parsed
+    except subprocess.TimeoutExpired:
+        log.error("  [DISCOVERY] mint timed out after 180s")
+        return None
+    except Exception as exc:
+        log.error(f"  [DISCOVERY] mint exception: {exc}")
         return None
 
 
@@ -1499,6 +1677,25 @@ def main():
                             log.info(f"  [RESULTS DB] updated and pushed")
                 except Exception as _re:
                     log.debug(f"  [RESULTS DB] update failed (non-fatal): {_re}")
+
+                # ── Discovery NFT ─────────────────────────────────────────────
+                # Fires after results-DB update so the registry write is last.
+                # Non-fatal: a mint failure never blocks the mining loop.
+                if not is_ref:
+                    try:
+                        _maybe_mint_discovery_nft(
+                            smiles=mol,
+                            affinity=affinity,
+                            target=target,
+                            miner_wallet=AUTH_KEYPAIR,
+                            validator_tx=tx_sig,
+                            source=source,
+                            auth_keypair_path=AUTH_KEYPAIR,
+                            rpc=SOLANA_RPC,
+                        )
+                    except Exception as _nft_err:
+                        log.debug(f"  [DISCOVERY] NFT mint non-fatal error: {_nft_err}")
+
             elif resp and resp.get("status") == "already_submitted":
                 log.info("  Already submitted this epoch — waiting for next epoch")
             else:

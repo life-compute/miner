@@ -1160,28 +1160,30 @@ function ProteinNetPanel({ proteinnet }) {
         ))}
       </div>
 
-      {top5.length === 0 ? (
-        <div style={{ color: T.textDim, fontSize: '11px', padding: '8px 0' }}>
-          Waiting for ≥30 Boltz2 scores per target to train models…
-        </div>
-      ) : top5.map(m => {
-        const r2Color   = m.r2 != null && m.r2 >= 0.3 ? T.green : m.r2 != null && m.r2 >= 0.1 ? T.amber : T.textDim
-        const statColor = m.status === 'ready' ? T.green : T.textDim
-        return (
-          <div key={m.target_id} style={{ display: 'grid', gridTemplateColumns: '52px 52px 82px 48px 62px 1fr', gap: '4px', padding: '3px 0', borderBottom: `1px solid ${T.green}18` }}>
-            <span style={{ color: T.green, fontWeight: 700, fontSize: '11px', textShadow: glow(T.green, 1) }}>{m.target_id}</span>
-            <span style={{ color: T.cyan,  fontSize: '11px' }}>{m.uniprot_id}</span>
-            <span style={{ color: T.cyan,  fontSize: '11px', textAlign: 'right', paddingRight: '8px' }}>{m.n}</span>
-            <span style={{ color: r2Color, fontWeight: 700, fontSize: '11px', textShadow: glow(r2Color, 1) }}>
-              {m.r2 != null ? m.r2.toFixed(2) : '—'}
-            </span>
-            <span style={{ color: statColor, fontSize: '10px', fontWeight: 700, letterSpacing: '0.05em' }}>
-              {m.status.toUpperCase()}
-            </span>
-            <span style={{ color: T.textDim, fontSize: '11px' }}>{ageFmt(m.last_trained)}</span>
+      <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+        {top5.length === 0 ? (
+          <div style={{ color: T.textDim, fontSize: '11px', padding: '8px 0' }}>
+            Waiting for ≥30 Boltz2 scores per target to train models…
           </div>
-        )
-      })}
+        ) : top5.map(m => {
+          const r2Color   = m.r2 != null && m.r2 >= 0.3 ? T.green : m.r2 != null && m.r2 >= 0.1 ? T.amber : T.textDim
+          const statColor = m.status === 'ready' ? T.green : T.textDim
+          return (
+            <div key={m.target_id} style={{ display: 'grid', gridTemplateColumns: '52px 52px 82px 48px 62px 1fr', gap: '4px', padding: '3px 0', borderBottom: `1px solid ${T.green}18` }}>
+              <span style={{ color: T.green, fontWeight: 700, fontSize: '11px', textShadow: glow(T.green, 1) }}>{m.target_id}</span>
+              <span style={{ color: T.cyan,  fontSize: '11px' }}>{m.uniprot_id}</span>
+              <span style={{ color: T.cyan,  fontSize: '11px', textAlign: 'right', paddingRight: '8px' }}>{m.n}</span>
+              <span style={{ color: r2Color, fontWeight: 700, fontSize: '11px', textShadow: glow(r2Color, 1) }}>
+                {m.r2 != null ? m.r2.toFixed(2) : '—'}
+              </span>
+              <span style={{ color: statColor, fontSize: '10px', fontWeight: 700, letterSpacing: '0.05em' }}>
+                {m.status.toUpperCase()}
+              </span>
+              <span style={{ color: T.textDim, fontSize: '11px' }}>{ageFmt(m.last_trained)}</span>
+            </div>
+          )
+        })}
+      </div>
 
       {/* Footer summary */}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontSize: '10px' }}>

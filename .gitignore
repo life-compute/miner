@@ -17,3 +17,5 @@ dev-keypair.json
 miner-keypair.json
 # Runtime state
 stats.json
+# Discovery NFT — registry is committed; transient NFT metadata files are not
+output/nft_metadata/
