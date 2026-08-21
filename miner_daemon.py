@@ -969,23 +969,23 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
         "MTOR":  15, "FGFR1": 16, "RET":   17, "AR":    18, "NTRK1":  19,
         "IDH1":  20, "FLT3":  21, "SMAD4": 22, "APC":   23, "PARP1":  24,
         "JAK2":  25, "ESR1":  26, "HDAC1": 27, "HDAC2": 28, "ABL1":   29,
-        # ── mRNA targets (on-chain IDs 30-59, pending MAX_TARGETS ≥ 60) ──────
+        # ── mRNA targets (on-chain IDs 2000-2029, MAX_TARGETS=2030) ────────
         # Oncogene silencing
-        "MYC_mRNA":      30, "KRAS_mRNA":    31, "BCL2_mRNA":  32,
-        "EGFR_mRNA":     33, "HER2_mRNA":    34, "BRAF_mRNA":  35,
-        "MDM2_mRNA":     36, "CDK4_mRNA":    37, "CCND1_mRNA": 38,
-        "SURVIVIN_mRNA": 39,
+        "MYC_mRNA":      2000, "KRAS_mRNA":    2001, "BCL2_mRNA":  2002,
+        "EGFR_mRNA":     2003, "HER2_mRNA":    2004, "BRAF_mRNA":  2005,
+        "MDM2_mRNA":     2006, "CDK4_mRNA":    2007, "CCND1_mRNA": 2008,
+        "SURVIVIN_mRNA": 2009,
         # Tumor microenvironment
-        "PDL1_mRNA":   40, "VEGF_mRNA":  41, "HIF1A_mRNA": 42,
-        "IL6_mRNA":    43, "TNF_mRNA":   44, "TGFb1_mRNA": 45,
-        "CSF1R_mRNA":  46, "CCL2_mRNA":  47, "CXCL12_mRNA":48,
-        "MMP9_mRNA":   49,
+        "PDL1_mRNA":  2010, "VEGF_mRNA":  2011, "HIF1A_mRNA": 2012,
+        "IL6_mRNA":   2013, "TNF_mRNA":   2014, "TGFb1_mRNA": 2015,
+        "CSF1R_mRNA": 2016, "CCL2_mRNA":  2017, "CXCL12_mRNA":2018,
+        "MMP9_mRNA":  2019,
         # Cancer metabolism
-        "LDHA_mRNA":  50, "PKM2_mRNA":  51, "GLUT1_mRNA": 52,
-        "HK2_mRNA":   53, "FASN_mRNA":  54,
+        "LDHA_mRNA":  2020, "PKM2_mRNA":  2021, "GLUT1_mRNA": 2022,
+        "HK2_mRNA":   2023, "FASN_mRNA":  2024,
         # DNA repair / immortality
-        "TERT_mRNA":  55, "PARP1_mRNA": 56, "RAD51_mRNA": 57,
-        "BRCA2_mRNA": 58, "ATM_mRNA":   59,
+        "TERT_mRNA":  2025, "PARP1_mRNA": 2026, "RAD51_mRNA": 2027,
+        "BRCA2_mRNA": 2028, "ATM_mRNA":   2029,
     }
 
     # Offset target index so GPUs work different targets simultaneously
@@ -1298,23 +1298,23 @@ def main():
         "MTOR":  15, "FGFR1": 16, "RET":   17, "AR":    18, "NTRK1":  19,
         "IDH1":  20, "FLT3":  21, "SMAD4": 22, "APC":   23, "PARP1":  24,
         "JAK2":  25, "ESR1":  26, "HDAC1": 27, "HDAC2": 28, "ABL1":   29,
-        # ── mRNA targets (on-chain IDs 30-59, pending MAX_TARGETS ≥ 60) ──────
+        # ── mRNA targets (on-chain IDs 2000-2029, MAX_TARGETS=2030) ────────
         # Oncogene silencing
-        "MYC_mRNA":      30, "KRAS_mRNA":    31, "BCL2_mRNA":  32,
-        "EGFR_mRNA":     33, "HER2_mRNA":    34, "BRAF_mRNA":  35,
-        "MDM2_mRNA":     36, "CDK4_mRNA":    37, "CCND1_mRNA": 38,
-        "SURVIVIN_mRNA": 39,
+        "MYC_mRNA":      2000, "KRAS_mRNA":    2001, "BCL2_mRNA":  2002,
+        "EGFR_mRNA":     2003, "HER2_mRNA":    2004, "BRAF_mRNA":  2005,
+        "MDM2_mRNA":     2006, "CDK4_mRNA":    2007, "CCND1_mRNA": 2008,
+        "SURVIVIN_mRNA": 2009,
         # Tumor microenvironment
-        "PDL1_mRNA":   40, "VEGF_mRNA":  41, "HIF1A_mRNA": 42,
-        "IL6_mRNA":    43, "TNF_mRNA":   44, "TGFb1_mRNA": 45,
-        "CSF1R_mRNA":  46, "CCL2_mRNA":  47, "CXCL12_mRNA":48,
-        "MMP9_mRNA":   49,
+        "PDL1_mRNA":  2010, "VEGF_mRNA":  2011, "HIF1A_mRNA": 2012,
+        "IL6_mRNA":   2013, "TNF_mRNA":   2014, "TGFb1_mRNA": 2015,
+        "CSF1R_mRNA": 2016, "CCL2_mRNA":  2017, "CXCL12_mRNA":2018,
+        "MMP9_mRNA":  2019,
         # Cancer metabolism
-        "LDHA_mRNA":  50, "PKM2_mRNA":  51, "GLUT1_mRNA": 52,
-        "HK2_mRNA":   53, "FASN_mRNA":  54,
+        "LDHA_mRNA":  2020, "PKM2_mRNA":  2021, "GLUT1_mRNA": 2022,
+        "HK2_mRNA":   2023, "FASN_mRNA":  2024,
         # DNA repair / immortality
-        "TERT_mRNA":  55, "PARP1_mRNA": 56, "RAD51_mRNA": 57,
-        "BRCA2_mRNA": 58, "ATM_mRNA":   59,
+        "TERT_mRNA":  2025, "PARP1_mRNA": 2026, "RAD51_mRNA": 2027,
+        "BRCA2_mRNA": 2028, "ATM_mRNA":   2029,
     }
 
     # Round-robin index — rotates through all fetched targets regardless of
