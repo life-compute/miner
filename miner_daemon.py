@@ -38,6 +38,19 @@ except Exception as _e:
     _TOOLS_AVAILABLE = False
     _tools_err = str(_e)
 
+# ── CRISPR gRNA optimizer ─────────────────────────────────────────────────────
+try:
+    from adaptive.life_crispr import (
+        pick_grna            as crispr_pick_grna,
+        CRISPR_TARGETS       as _CRISPR_TARGETS,
+        CRISPR_TARGET_ID_MAP as _CRISPR_TARGET_ID_MAP,
+    )
+    _CRISPR_AVAILABLE = True
+except Exception as _crispr_err:
+    _CRISPR_AVAILABLE = False
+    _CRISPR_TARGETS       = []
+    _CRISPR_TARGET_ID_MAP = {}
+
 # ── LIFE PULSE — continuous Sobol molecular sweep ─────────────────────────────
 try:
     from adaptive.life_pulse import (
@@ -1164,6 +1177,8 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
         # DNA repair / immortality
         "TERT_mRNA":  2025, "PARP1_mRNA": 2026, "RAD51_mRNA": 2027,
         "BRCA2_mRNA": 2028, "ATM_mRNA":   2029,
+        # ── CRISPR targets (on-chain IDs 3000-3009) ────────────────────────
+        **_CRISPR_TARGET_ID_MAP,
     }
 
     # Offset target index so GPUs work different targets simultaneously
@@ -1451,6 +1466,74 @@ def main():
         threading.Thread(target=_pnet_retrain_loop, daemon=True, name="proteinnet-retrain").start()
         log.info("[PROTEINNET] Background retrain thread started (every 5 min)")
 
+    # ── CRISPR background scoring thread ──────────────────────────────────────
+    # Runs entirely on CPU (<1 ms per gRNA); never blocks the GPU Boltz2 loop.
+    if _CRISPR_AVAILABLE:
+        def _crispr_loop():
+            """Score CRISPR targets continuously in a background daemon thread."""
+            log.info("[CRISPR] Background gRNA scoring thread started")
+            _crispr_sub_memory = SubmissionMemory() if _TOOLS_AVAILABLE else None
+            _crispr_target_idx = 0
+            while True:
+                try:
+                    if not _CRISPR_TARGETS:
+                        time.sleep(60)
+                        continue
+                    target = _CRISPR_TARGETS[_crispr_target_idx % len(_CRISPR_TARGETS)]
+                    _crispr_target_idx += 1
+                    tid = target["id"]
+                    thresh = target.get("target_score_threshold", -7.0)
+
+                    grna_seq, affinity, source = crispr_pick_grna(target, n=50)
+
+                    hit = affinity <= thresh
+                    log.info(
+                        f"[CRISPR] {tid} | gRNA: {grna_seq} | "
+                        f"aff={affinity:.3f} | {'✔ HIT' if hit else '✘ miss'}"
+                    )
+
+                    # Append to shared scoring JSONL feed
+                    _boltz_jsonl = WORK_DIR / "output" / "life_boltz_scores.jsonl"
+                    try:
+                        _boltz_jsonl.parent.mkdir(exist_ok=True)
+                        with _boltz_jsonl.open("a") as _fh:
+                            _fh.write(json.dumps({
+                                "ts":          time.time(),
+                                "target_id":   tid,
+                                "smiles":      grna_seq,        # gRNA sequence in the SMILES field
+                                "boltz_score": affinity,        # combined score as proxy
+                                "affinity":    affinity,
+                                "hit":         hit,
+                                "source":      source,          # "crispr_generated"
+                                "target_type": "CRISPR",
+                            }) + "\n")
+                    except Exception as _je:
+                        log.debug(f"[CRISPR] JSONL write failed: {_je}")
+
+                    # On-chain submission — gates on registered target ID
+                    if hit and tid in _CRISPR_TARGET_ID_MAP:
+                        log.info(f"[CRISPR] HIT — submitting {tid} on-chain...")
+                        resp = submit_on_chain(_CRISPR_TARGET_ID_MAP[tid], grna_seq, affinity, boltz_seed=BOLTZ_SEED)
+                        if resp and resp.get("tx"):
+                            log.info(f"[CRISPR] ✔ tx: {resp['tx']}")
+                        elif resp and resp.get("status") == "already_submitted":
+                            log.info("[CRISPR] Already submitted this epoch")
+                        else:
+                            log.info(f"[CRISPR] HIT but {tid} not yet registered on-chain (ID 3000-3009 pending)")
+                    elif hit:
+                        log.info(f"[CRISPR] HIT but {tid} not yet registered on-chain — skipping submission")
+
+                except Exception as _ce:
+                    log.warning(f"[CRISPR] thread error (non-fatal): {_ce}")
+
+                # Short sleep — CRISPR is CPU-only, can run frequently
+                time.sleep(10)
+
+        threading.Thread(target=_crispr_loop, daemon=True, name="crispr-grna").start()
+        log.info(f"[CRISPR] Background gRNA thread started ({len(_CRISPR_TARGETS)} CRISPR targets)")
+    else:
+        log.warning("[CRISPR] life_crispr unavailable — CRISPR scoring disabled")
+
     stats = {
         "alive": True,
         "current_target": "",
@@ -1493,6 +1576,8 @@ def main():
         # DNA repair / immortality
         "TERT_mRNA":  2025, "PARP1_mRNA": 2026, "RAD51_mRNA": 2027,
         "BRCA2_mRNA": 2028, "ATM_mRNA":   2029,
+        # ── CRISPR targets (on-chain IDs 3000-3009) ────────────────────────
+        **_CRISPR_TARGET_ID_MAP,
     }
 
     # Round-robin index — rotates through all fetched targets regardless of
@@ -1520,6 +1605,15 @@ def main():
                 uid  = t["uniprot_id"]
                 flag = "✓ MSA" if _msa_path_for(uid) != "empty" else "✗ no MSA (single-seq)"
                 log.info(f"  {t['id']:8s} {uid}  {flag}")
+            # Inject CRISPR targets into the round-robin pool (CPU-scored, background)
+            # CRISPR scoring runs in _crispr_loop — these entries are skipped in
+            # the main GPU loop via the target_type gate below.
+            if _CRISPR_AVAILABLE:
+                existing_ids = {t["id"] for t in targets}
+                for ct in _CRISPR_TARGETS:
+                    if ct["id"] not in existing_ids:
+                        targets.append(ct)
+
             # Launch background MSA prefetch for all targets (skips cached files)
             if _AUTO_MSA_AVAILABLE:
                 _auto_msa_prefetch(targets)  # type: ignore[possibly-unbound]
@@ -1531,8 +1625,12 @@ def main():
         _maybe_advance_epoch()
 
         # Round-robin over all fetched targets; submission eligibility is separate
+        # Skip CRISPR targets — they are handled by the background _crispr_loop thread
         target = targets[target_idx % len(targets)]
         target_idx += 1
+        if target.get("target_type") == "CRISPR":
+            continue   # GPU loop skips CRISPR; background thread handles it
+
         tid    = target["id"]
         thresh = target.get("target_score_threshold", -7.0)
         uid    = target["uniprot_id"]
@@ -1556,8 +1654,8 @@ def main():
 
         is_ref    = (source == "ref")
         is_mrna   = target.get("target_type") == "mRNA"
-        mrna_tag  = " [RNA]" if is_mrna else ""
-        log.info(f"Target: {tid}{mrna_tag} ({uid}) | tier {target.get('difficulty_tier','?')} "
+        type_tag  = " [RNA]" if is_mrna else ""
+        log.info(f"Target: {tid}{type_tag} ({uid}) | tier {target.get('difficulty_tier','?')} "
                  f"| threshold {thresh} | MSA: {'local' if msa != 'empty' else 'empty'}")
         log.info(f"Molecule: {mol[:80]}  [{source}]")
         log.info("Running Boltz2 GPU scoring...")

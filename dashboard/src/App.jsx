@@ -477,8 +477,9 @@ function MinerStatusPanel({ alive, currentTarget, minerId, lastUpdated }) {
 function LiveScoringFeedPanel({ feed }) {
   const rows = feed ?? []
   const srcColor = (s) =>
-    s === 'ref'       ? T.purple :
-    s === 'generated' ? T.cyan :
+    s === 'ref'              ? T.purple :
+    s === 'generated'        ? T.cyan :
+    s === 'crispr_generated' ? '#3498db' :
     T.greenDim
 
   return (
@@ -523,8 +524,18 @@ function LiveScoringFeedPanel({ feed }) {
               <span style={{ color: T.textDim, fontSize: '10px', fontVariantNumeric: 'tabular-nums' }}>
                 {r.ts ? r.ts.slice(11, 19) : '—'}
               </span>
-              <span style={{ color: T.cyan, fontWeight: 700, textShadow: glow(T.cyan, 2) }}>
+              <span style={{ color: T.cyan, fontWeight: 700, textShadow: glow(T.cyan, 2), display: 'flex', alignItems: 'center', gap: '3px' }}>
                 {r.target_id}
+                {r.target_type === 'CRISPR' && (
+                  <span style={{ fontSize: '8px', color: '#3498db', border: '1px solid #3498db60',
+                                 borderRadius: '2px', padding: '0px 3px', fontFamily: T.mono,
+                                 letterSpacing: '0.05em', lineHeight: '14px' }}>CRISPR</span>
+                )}
+                {r.target_type === 'mRNA' && (
+                  <span style={{ fontSize: '8px', color: '#ff9f43', border: '1px solid #ff9f4360',
+                                 borderRadius: '2px', padding: '0px 3px', fontFamily: T.mono,
+                                 letterSpacing: '0.05em', lineHeight: '14px' }}>RNA</span>
+                )}
               </span>
               <span title={r.smiles || ''}
                     style={{ color: T.green, overflow: 'hidden', textOverflow: 'ellipsis',
@@ -765,10 +776,12 @@ function GpuWorkersPanel({ workers }) {
 
 /* ─── Cancer targets panel ──────────────────────────────────── */
 function TargetsPanel({ targets }) {
-  const protein = targets.filter(t => !t.endsWith('_mRNA'))
+  const protein = targets.filter(t => !t.endsWith('_mRNA') && !t.endsWith('_CRISPR'))
   const mrna    = targets.filter(t => t.endsWith('_mRNA'))
+  const crispr  = targets.filter(t => t.endsWith('_CRISPR'))
   const PROTEIN_GENES = ['TP53', 'BRCA1', 'EGFR', 'HER2', 'KRAS', 'BCL2', 'CDK4', 'VEGFR2', 'PDL1', 'MDM2']
   const MRNA_GENES    = ['MYC_mRNA', 'KRAS_mRNA', 'BCL2_mRNA', 'TERT_mRNA', 'PDL1_mRNA']
+  const CRISPR_GENES  = ['TP53_CRISPR', 'KRAS_CRISPR', 'BCL2_CRISPR', 'MYC_CRISPR', 'EGFR_CRISPR']
   return (
     <Panel accent={T.cyan}>
       <div style={S.panelTitle}>
@@ -779,6 +792,8 @@ function TargetsPanel({ targets }) {
           <span style={{ color: T.cyan, fontWeight: 700, textShadow: glow(T.cyan, 3) }}>{protein.length}</span>
           <span style={{ color: '#ff9f43', fontSize: '10px', opacity: 0.8 }}>RNA</span>
           <span style={{ color: '#ff9f43', fontWeight: 700, textShadow: glow('#ff9f43', 3) }}>{mrna.length}</span>
+          <span style={{ color: '#3498db', fontSize: '10px', opacity: 0.8 }}>CRISPR</span>
+          <span style={{ color: '#3498db', fontWeight: 700, textShadow: glow('#3498db', 3) }}>{crispr.length}</span>
         </span>
       </div>
       {targets.length === 0 ? (
@@ -805,6 +820,16 @@ function TargetsPanel({ targets }) {
               <span style={{ ...S.pill(T.green) }}>ACTIVE</span>
             </div>
           ))}
+          {crispr.map((t, i) => (
+            <div key={'c'+i} style={{ ...S.targetItem, borderColor: '#3498db40' }}>
+              <div style={{ ...S.targetPip, background: '#3498db', boxShadow: '0 0 6px #3498db' }} />
+              <span style={{ color: '#3498db', fontWeight: 700, textShadow: glow('#3498db', 2) }}>{t}</span>
+              <span style={{ marginLeft: 'auto', fontSize: '9px', color: '#3498db', opacity: 0.85,
+                             border: '1px solid #3498db60', borderRadius: '3px', padding: '1px 5px',
+                             letterSpacing: '0.05em', fontFamily: T.mono }}>CRISPR</span>
+              <span style={{ ...S.pill(T.green) }}>ACTIVE</span>
+            </div>
+          ))}
         </>
       )}
       {PROTEIN_GENES.filter(g => !targets.includes(g)).slice(0, 2).map((g, i) => (
@@ -821,6 +846,16 @@ function TargetsPanel({ targets }) {
           <span style={{ marginLeft: '6px', fontSize: '9px', color: T.textDim,
                          border: '1px solid #ffffff20', borderRadius: '3px',
                          padding: '1px 4px', fontFamily: T.mono }}>RNA</span>
+          <span style={{ marginLeft: 'auto', ...S.pill(T.textDim) }}>LOCKED</span>
+        </div>
+      ))}
+      {CRISPR_GENES.filter(g => !targets.includes(g)).slice(0, 2).map((g, i) => (
+        <div key={g} style={{ ...S.targetItem, opacity: 0.25, border: `1px solid ${T.border}` }}>
+          <div style={{ ...S.targetPip, background: T.textDim, boxShadow: 'none', animation: 'none' }} />
+          <span style={{ color: T.textDim }}>{g}</span>
+          <span style={{ marginLeft: '6px', fontSize: '9px', color: T.textDim,
+                         border: '1px solid #ffffff20', borderRadius: '3px',
+                         padding: '1px 4px', fontFamily: T.mono }}>CRISPR</span>
           <span style={{ marginLeft: 'auto', ...S.pill(T.textDim) }}>LOCKED</span>
         </div>
       ))}
@@ -1121,6 +1156,148 @@ function PulsePanel({ pulse }) {
           <span style={{ color: T.green, flexShrink: 0, fontSize: '11px' }}>{r.proxy_score?.toFixed(3)}</span>
         </div>
       ))}
+    </Panel>
+  )
+}
+
+/* ─── ACTIVE STRUCTURE — 3D protein visualisation ───────────── */
+const PDB_MAP = {
+  TP53:      '2OCJ',
+  KRAS:      '4OBE',
+  BRCA1:     '1JM7',
+  BCL2:      '2W3L',
+  EGFR:      '1IVO',
+  HER2:      '3PP0',
+  MDM2:      '1YCR',
+  CDK4:      '2W96',
+  IDH1:      '3MAR',
+  HDAC1:     '4BKX',
+  HDAC2:     '3MAX',
+  ESR1:      '1A52',
+  PDL1:      '5XXY',
+  KRAS_mRNA: '6XRZ',
+  MYC_mRNA:  '1NKP',
+}
+const FALLBACK_PDB = { target: 'TP53', id: '2OCJ' }
+
+function ActiveStructurePanel({ currentTarget }) {
+  const containerRef = useRef(null)
+  const viewerRef    = useRef(null)
+  const loadedRef    = useRef(null)   // tracks last loaded (target+pdbId)
+  const [status, setStatus] = useState('LOADING…')
+  const [info,   setInfo]   = useState({ target: '—', pdbId: '—' })
+
+  // Dynamically load 3Dmol.js once
+  useEffect(() => {
+    if (window.$3Dmol) return
+    const s = document.createElement('script')
+    s.src = 'https://3dmol.csb.pitt.edu/build/3Dmol-min.js'
+    s.async = true
+    document.head.appendChild(s)
+    return () => {}
+  }, [])
+
+  // Resolve target → pdbId
+  const resolveTarget = useCallback((raw) => {
+    const key = (raw || '').replace(/^TARGET_/, '').toUpperCase()
+    const id   = PDB_MAP[key] || PDB_MAP[raw] || null
+    if (id)  return { target: key, pdbId: id }
+    // try partial match
+    const found = Object.keys(PDB_MAP).find(k => raw && raw.toUpperCase().includes(k))
+    if (found) return { target: found, pdbId: PDB_MAP[found] }
+    return { target: FALLBACK_PDB.target, pdbId: FALLBACK_PDB.id }
+  }, [])
+
+  // Load structure whenever target changes
+  useEffect(() => {
+    const { target: tgt, pdbId } = resolveTarget(currentTarget)
+    const key = `${tgt}:${pdbId}`
+    if (loadedRef.current === key) return
+    loadedRef.current = key
+    setInfo({ target: tgt, pdbId })
+    setStatus('FETCHING…')
+
+    async function load() {
+      // Wait for 3Dmol to be available (retry up to ~5 s)
+      let attempts = 0
+      while (!window.$3Dmol && attempts < 50) {
+        await new Promise(r => setTimeout(r, 100))
+        attempts++
+      }
+      if (!window.$3Dmol) { setStatus('3DMOL UNAVAILABLE'); return }
+      if (!containerRef.current) { setStatus('NO CONTAINER'); return }
+
+      try {
+        const url  = `https://files.rcsb.org/download/${pdbId}.pdb`
+        const resp = await fetch(url)
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const pdbData = await resp.text()
+
+        // Destroy previous viewer
+        if (viewerRef.current) {
+          try { viewerRef.current.clear() } catch {}
+        }
+        containerRef.current.innerHTML = ''
+
+        const viewer = window.$3Dmol.createViewer(containerRef.current, {
+          backgroundColor: '#020805',
+        })
+        viewerRef.current = viewer
+        viewer.addModel(pdbData, 'pdb')
+        viewer.setStyle({}, { cartoon: { color: '#00ff41' } })
+        viewer.zoomTo()
+        viewer.spin('y', 0.5)
+        viewer.render()
+        setStatus('ONLINE')
+      } catch (e) {
+        setStatus(`ERR: ${e.message}`)
+      }
+    }
+
+    load()
+  }, [currentTarget, resolveTarget])
+
+  return (
+    <Panel accent={T.green}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(T.green)}>⬡</span>
+        <span>ACTIVE STRUCTURE</span>
+        <span style={{ marginLeft: 'auto', ...S.pill(status === 'ONLINE' ? T.green : T.textDim) }}>
+          {status}
+        </span>
+      </div>
+
+      {/* 3D viewer container */}
+      <div
+        ref={containerRef}
+        style={{
+          width:           '100%',
+          height:          '220px',
+          background:      '#020805',
+          border:          `1px solid ${T.green}44`,
+          boxShadow:       `inset 0 0 20px #020805, 0 0 8px ${T.green}33`,
+          position:        'relative',
+          overflow:        'hidden',
+          marginTop:       '8px',
+          marginBottom:    '8px',
+        }}
+      />
+
+      {/* Target info below viewer */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+        <div style={S.kv}>
+          <span style={{ color: T.textDim, fontSize: '11px' }}>TARGET</span>
+          <span style={{ color: T.green, fontWeight: 700, textShadow: glow(T.green, 2), fontSize: '11px' }}>
+            {info.target}
+          </span>
+        </div>
+        <div style={S.kv}>
+          <span style={{ color: T.textDim, fontSize: '11px' }}>PDB_ID</span>
+          <span style={{ color: T.cyan, fontWeight: 700, textShadow: glow(T.cyan, 2), fontSize: '11px' }}>
+            {info.pdbId}
+          </span>
+        </div>
+      </div>
     </Panel>
   )
 }
@@ -1985,6 +2162,7 @@ export default function App() {
             <ScoringHistoryPanel history={scoring} />
             <NetworkPanel        network={network} />
             <PublicArtPanel      art={pub?.art} />
+            <ActiveStructurePanel currentTarget={target} />
             <ProteinNetPanel     proteinnet={pub?.proteinnet} />
 
             {/* LIFE PULSE — always visible (public endpoint) */}
