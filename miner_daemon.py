@@ -855,15 +855,19 @@ def _maybe_mint_discovery_nft(
     auth_keypair_path: str,
     rpc: str,
     dry_run: bool = False,
+    grna_scores: dict | None = None,
 ) -> dict | None:
     """Evaluate discovery eligibility and mint an NFT if all rules pass.
 
     Rules (all must be true):
-      1. source is 'zinc15', 'zinc15-fallback', 'mutant', 'generate', or 'pulse'
-         (not 'ref' / 'reference' — no reference compounds)
+      1. source is 'zinc15', 'zinc15-fallback', 'mutant', 'generate', 'pulse',
+         or 'crispr_generated' (not 'ref' / 'reference')
       2. affinity is in the top-10% for this target (historical novel scores)
-      3. SMILES not already minted (checked inside the JS script)
+      3. SMILES / gRNA not already minted (checked inside the JS script)
       4. mint_discovery_nft.js is present
+
+    grna_scores : for CRISPR sources, dict with on_target / off_target / delivery
+                  scores to embed in NFT metadata.
 
     Returns the parsed result dict from the script, or None on error/skip.
     """
@@ -872,7 +876,7 @@ def _maybe_mint_discovery_nft(
     protein_name = target.get("protein_name", tid)
 
     # Rule 1 — novel source only
-    novel_sources = {"zinc15", "zinc15-fallback", "mutant", "generate", "pulse"}
+    novel_sources = {"zinc15", "zinc15-fallback", "mutant", "generate", "pulse", "crispr_generated"}
     if source not in novel_sources:
         log.debug(f"  [DISCOVERY] skipping — source '{source}' not novel")
         return None
@@ -897,6 +901,7 @@ def _maybe_mint_discovery_nft(
     except Exception:
         _pub = miner_wallet  # fallback to whatever was passed in
 
+    is_crispr = source == "crispr_generated"
     args = {
         "rpc":              rpc,
         "authKeypair":      auth_keypair_path,
@@ -914,6 +919,13 @@ def _maybe_mint_discovery_nft(
         "registryPath":     str(DISCOVERY_REGISTRY),
         "dryRun":           dry_run,
         "cluster":          "devnet" if "devnet" in rpc else "mainnet-beta",
+        # CRISPR-specific fields (ignored by JS for non-CRISPR sources)
+        "isCrispr":          is_crispr,
+        "geneName":          target.get("gene_name", tid.replace("_CRISPR", "")),
+        "cancerIndication":   target.get("cancer_indication", ""),
+        "grnaOnTarget":       (grna_scores or {}).get("on_target", 0.0),
+        "grnaOffTarget":      (grna_scores or {}).get("off_target", 0.0),
+        "grnaDelivery":       (grna_scores or {}).get("delivery", 0.0),
     }
 
     log.info(f"  [DISCOVERY] 🧬 minting NFT — global #{global_n}, "
@@ -1484,7 +1496,7 @@ def main():
                     tid = target["id"]
                     thresh = target.get("target_score_threshold", -7.0)
 
-                    grna_seq, affinity, source = crispr_pick_grna(target, n=50)
+                    grna_seq, affinity, source, grna_scores = crispr_pick_grna(target, n=50)
 
                     hit = affinity <= thresh
                     log.info(
@@ -1511,17 +1523,36 @@ def main():
                         log.debug(f"[CRISPR] JSONL write failed: {_je}")
 
                     # On-chain submission — gates on registered target ID
+                    tx_sig_crispr: str | None = None
                     if hit and tid in _CRISPR_TARGET_ID_MAP:
                         log.info(f"[CRISPR] HIT — submitting {tid} on-chain...")
                         resp = submit_on_chain(_CRISPR_TARGET_ID_MAP[tid], grna_seq, affinity, boltz_seed=BOLTZ_SEED)
                         if resp and resp.get("tx"):
                             log.info(f"[CRISPR] ✔ tx: {resp['tx']}")
+                            tx_sig_crispr = resp["tx"]
                         elif resp and resp.get("status") == "already_submitted":
                             log.info("[CRISPR] Already submitted this epoch")
                         else:
                             log.info(f"[CRISPR] HIT but {tid} not yet registered on-chain (ID 3000-3009 pending)")
                     elif hit:
                         log.info(f"[CRISPR] HIT but {tid} not yet registered on-chain — skipping submission")
+
+                    # Discovery NFT — mint for top-10% novel gRNA hits
+                    if hit:
+                        try:
+                            _maybe_mint_discovery_nft(
+                                smiles=grna_seq,
+                                affinity=affinity,
+                                target=target,
+                                miner_wallet=AUTH_KEYPAIR,
+                                validator_tx=tx_sig_crispr or "pending",
+                                source=source,
+                                auth_keypair_path=AUTH_KEYPAIR,
+                                rpc=SOLANA_RPC,
+                                grna_scores=grna_scores,
+                            )
+                        except Exception as _nft_err:
+                            log.debug(f"[CRISPR] NFT mint non-fatal error: {_nft_err}")
 
                 except Exception as _ce:
                     log.warning(f"[CRISPR] thread error (non-fatal): {_ce}")

@@ -1,20 +1,25 @@
 /**
  * LIFE Compute — Discovery NFT Minter
  * ─────────────────────────────────────────────────────────────────────────────
- * Mints a Metaplex Token-Metadata NFT on Solana for every novel molecule that
- * clears the discovery threshold (top-10% affinity for its target) and has
- * been validator-confirmed on-chain.
+ * Mints a Metaplex Token-Metadata NFT on Solana for every novel discovery that
+ * clears the discovery threshold (top-10% for its target) and has been
+ * validator-confirmed on-chain.
+ *
+ * Supports two discovery modalities:
+ *   • Protein/mRNA  — small-molecule binders scored by Boltz2 (affinity)
+ *   • CRISPR gRNA   — 20-mer guide RNA sequences scored by three analytical
+ *                     metrics (on-target, off-target, delivery)
  *
  * Usage (called by miner_daemon.py after a confirmed novel HIT):
  *   node scripts/mint_discovery_nft.js '<json-args>'
  *
- * Required JSON args:
+ * ── Required JSON args (ALL sources) ─────────────────────────────────────────
  *   rpc             – Solana RPC URL
  *   authKeypair     – path to fee-payer keypair JSON (byte array)
- *   smiles          – SMILES string of the discovered molecule
+ *   smiles          – SMILES string  OR  20-mer gRNA sequence
  *   affinity        – Boltz2 affinity score (kcal/mol, negative = good)
- *   targetId        – gene/target string  e.g. "TP53"
- *   targetName      – human-readable protein name
+ *   targetId        – gene/target string  e.g. "TP53" or "TP53_CRISPR"
+ *   targetName      – human-readable protein/target name
  *   uniprotId       – UniProt accession
  *   minerWallet     – discoverer pubkey (base58)
  *   validatorTx     – on-chain tx signature that confirmed the result
@@ -25,6 +30,14 @@
  *   registryPath    – absolute path to output/discoveries.json
  *   dryRun          – (optional) if true, skip actual minting
  *   cluster         – (optional) "devnet" | "mainnet-beta" (default: devnet)
+ *
+ * ── Additional args for CRISPR gRNA discoveries ───────────────────────────────
+ *   isCrispr          – true  (boolean flag)
+ *   geneName          – gene symbol e.g. "TP53"
+ *   cancerIndication  – e.g. "colorectal, lung, breast, ovarian"
+ *   grnaOnTarget      – on-target efficiency score  (0–1)
+ *   grnaOffTarget     – off-target risk score        (0–1)
+ *   grnaDelivery      – delivery compatibility score (0–1.1)
  *
  * stdout: one JSON line (last line) consumed by Python — {status, mint, tx, …}
  * stderr: verbose diagnostic log
@@ -55,8 +68,57 @@ function ordinalSuffix(n) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
-function buildMetadata(args) {
-  const date    = args.timestamp.slice(0, 10);                // YYYY-MM-DD
+// ── Metadata builders ─────────────────────────────────────────────────────────
+
+/**
+ * Build metadata for a CRISPR gRNA discovery.
+ * Name: "LIFE Discovery #N — [GENE] gRNA [DATE]"
+ */
+function buildCrisprMetadata(args) {
+  const date    = args.timestamp.slice(0, 10);           // YYYY-MM-DD
+  const rank    = ordinalSuffix(Number(args.discoveryRank));
+  const num     = Number(args.discoveryNumber);
+  const gene    = args.geneName || args.targetId.replace('_CRISPR', '');
+
+  const name    = `LIFE Discovery #${num} — ${gene} gRNA ${date}`;
+  const symbol  = 'LIFE-DSC';
+
+  const description =
+    `Top-10% CRISPR guide RNA for ${gene} discovered by LIFE Compute miner ` +
+    `${args.minerWallet}. ` +
+    `This 20-mer gRNA is the ${rank} validated guide for ${gene} ` +
+    `identified by the LIFE decentralized drug-discovery network. ` +
+    `Cancer indication: ${args.cancerIndication || 'oncology'}.`;
+
+  const attributes = [
+    { trait_type: 'modality',           value: 'CRISPR gRNA' },
+    { trait_type: 'target_id',          value: args.targetId },
+    { trait_type: 'gene_name',          value: gene },
+    { trait_type: 'cancer_indication',  value: args.cancerIndication || '' },
+    { trait_type: 'uniprot_id',         value: args.uniprotId },
+    { trait_type: 'grna_sequence',      value: args.smiles },           // 20-mer
+    { trait_type: 'on_target_score',    value: String(Number(args.grnaOnTarget  || 0).toFixed(4)) },
+    { trait_type: 'off_target_score',   value: String(Number(args.grnaOffTarget || 0).toFixed(4)) },
+    { trait_type: 'delivery_score',     value: String(Number(args.grnaDelivery  || 0).toFixed(4)) },
+    { trait_type: 'combined_affinity',  value: String(args.affinity) },
+    { trait_type: 'discovery_rank',     value: String(args.discoveryRank) },
+    { trait_type: 'discovery_number',   value: String(num) },
+    { trait_type: 'miner_wallet',       value: args.minerWallet },
+    { trait_type: 'validator_tx',       value: args.validatorTx },
+    { trait_type: 'timestamp',          value: args.timestamp },
+    { trait_type: 'source',             value: 'LIFE Compute / CRISPR gRNA Optimizer' },
+    { trait_type: 'proceeds',           value: '100% to LIFE Foundation' },
+  ];
+
+  return { name, symbol, description, attributes };
+}
+
+/**
+ * Build metadata for a protein / mRNA small-molecule discovery.
+ * Name: "LIFE Discovery #N — [TARGET] [DATE]"  (original format)
+ */
+function buildMoleculeMetadata(args) {
+  const date    = args.timestamp.slice(0, 10);
   const rank    = ordinalSuffix(Number(args.discoveryRank));
   const num     = Number(args.discoveryNumber);
 
@@ -70,21 +132,26 @@ function buildMetadata(args) {
     `identified by the LIFE decentralized drug-discovery network.`;
 
   const attributes = [
-    { trait_type: 'target_id',           value: args.targetId },
-    { trait_type: 'target_name',         value: args.targetName },
-    { trait_type: 'uniprot_id',          value: args.uniprotId },
-    { trait_type: 'smiles',              value: args.smiles },
-    { trait_type: 'affinity_kcal_mol',   value: String(args.affinity) },
-    { trait_type: 'discovery_rank',      value: String(args.discoveryRank) },
-    { trait_type: 'discovery_number',    value: String(num) },
-    { trait_type: 'miner_wallet',        value: args.minerWallet },
-    { trait_type: 'validator_tx',        value: args.validatorTx },
-    { trait_type: 'timestamp',           value: args.timestamp },
-    { trait_type: 'source',              value: 'LIFE Compute / Boltz2' },
-    { trait_type: 'proceeds',            value: '100% to LIFE Foundation' },
+    { trait_type: 'modality',           value: 'small molecule' },
+    { trait_type: 'target_id',          value: args.targetId },
+    { trait_type: 'target_name',        value: args.targetName },
+    { trait_type: 'uniprot_id',         value: args.uniprotId },
+    { trait_type: 'smiles',             value: args.smiles },
+    { trait_type: 'affinity_kcal_mol',  value: String(args.affinity) },
+    { trait_type: 'discovery_rank',     value: String(args.discoveryRank) },
+    { trait_type: 'discovery_number',   value: String(num) },
+    { trait_type: 'miner_wallet',       value: args.minerWallet },
+    { trait_type: 'validator_tx',       value: args.validatorTx },
+    { trait_type: 'timestamp',          value: args.timestamp },
+    { trait_type: 'source',             value: 'LIFE Compute / Boltz2' },
+    { trait_type: 'proceeds',           value: '100% to LIFE Foundation' },
   ];
 
   return { name, symbol, description, attributes };
+}
+
+function buildMetadata(args) {
+  return args.isCrispr ? buildCrisprMetadata(args) : buildMoleculeMetadata(args);
 }
 
 // ── Minimal off-chain JSON uploader (data URI — no external upload needed) ──
@@ -92,11 +159,14 @@ function buildMetadata(args) {
 // script works without Arweave/IPFS credentials.  A real deployment would swap
 // this for umi.use(irysUploader()) or a pinata call.
 function buildDataUri(meta, args) {
+  const isCrispr = Boolean(args.isCrispr);
   const json = {
     name:        meta.name,
     symbol:      meta.symbol,
     description: meta.description,
-    image:       'https://life-compute.github.io/assets/discovery-nft.png',
+    image:       isCrispr
+      ? 'https://life-compute.github.io/assets/discovery-nft-crispr.png'
+      : 'https://life-compute.github.io/assets/discovery-nft.png',
     external_url: 'https://life-compute.io',
     attributes:  meta.attributes,
     properties: {
@@ -111,15 +181,27 @@ function buildDataUri(meta, args) {
 }
 
 // ── Discovery registry helpers ───────────────────────────────────────────────
+
+/**
+ * Registry schema:
+ *   { discoveries: [...], smiles_index: {}, grna_index: {}, target_counts: {} }
+ *
+ * grna_index keys on the 20-mer sequence (same as smiles_index keys on SMILES).
+ * Both gates use the same duplicate-prevention logic; they are separate indices
+ * so SMILES and gRNA sequences can never collide even if they share characters.
+ */
 function loadRegistry(registryPath) {
   try {
     if (fs.existsSync(registryPath)) {
-      return JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+      const reg = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+      // Backfill grna_index for registries created before CRISPR support
+      if (!reg.grna_index) reg.grna_index = {};
+      return reg;
     }
   } catch (e) {
     log('registry load error (starting fresh):', e.message);
   }
-  return { discoveries: [], smiles_index: {}, target_counts: {} };
+  return { discoveries: [], smiles_index: {}, grna_index: {}, target_counts: {} };
 }
 
 function saveRegistry(registryPath, registry) {
@@ -145,10 +227,35 @@ function saveRegistry(registryPath, registry) {
     }
   }
 
+  // ── CRISPR-specific validation ─────────────────────────────────────────────
+  const isCrispr = Boolean(args.isCrispr);
+  if (isCrispr) {
+    // 20-mer: exactly 20 nucleotide characters A/C/G/T/U (case-insensitive)
+    if (!/^[ACGTUacgtu]{20}$/.test(String(args.smiles).trim())) {
+      const err = {
+        status: 'error',
+        error:  `Invalid gRNA sequence (must be 20-mer ACGTU): '${args.smiles}'`,
+      };
+      process.stdout.write(JSON.stringify(err) + '\n');
+      process.exit(1);
+    }
+  }
+
   const dryRun  = Boolean(args.dryRun);
   const cluster = args.cluster || 'devnet';
 
-  log('smiles    :', args.smiles.slice(0, 80));
+  if (isCrispr) {
+    log('modality  : CRISPR gRNA');
+    log('gRNA      :', args.smiles);
+    log('gene      :', args.geneName || args.targetId);
+    log('indication:', args.cancerIndication || '(none)');
+    log('on-target :', args.grnaOnTarget);
+    log('off-target:', args.grnaOffTarget);
+    log('delivery  :', args.grnaDelivery);
+  } else {
+    log('modality  : small molecule');
+    log('smiles    :', String(args.smiles).slice(0, 80));
+  }
   log('target    :', args.targetId, '/', args.targetName);
   log('affinity  :', args.affinity, 'kcal/mol');
   log('validator :', args.validatorTx);
@@ -158,16 +265,19 @@ function saveRegistry(registryPath, registry) {
   log('dryRun    :', dryRun);
   log('cluster   :', cluster);
 
-  // ── Registry: duplicate SMILES check ──────────────────────────────────────
-  const registry = loadRegistry(args.registryPath);
-  const smilesKey = args.smiles.trim();
+  // ── Registry: duplicate gate ───────────────────────────────────────────────
+  // CRISPR uses grna_index (keyed on the 20-mer); molecules use smiles_index.
+  const registry   = loadRegistry(args.registryPath);
+  const seqKey     = String(args.smiles).trim();
+  const dupeIndex  = isCrispr ? registry.grna_index : registry.smiles_index;
+  const dupeLabel  = isCrispr ? 'gRNA sequence' : 'SMILES';
 
-  if (registry.smiles_index[smilesKey]) {
-    const prev = registry.smiles_index[smilesKey];
-    log(`DUPLICATE SMILES — already minted as discovery #${prev.discovery_number} tx=${prev.mint_tx}`);
+  if (dupeIndex[seqKey]) {
+    const prev = dupeIndex[seqKey];
+    log(`DUPLICATE ${dupeLabel} — already minted as discovery #${prev.discovery_number} tx=${prev.mint_tx}`);
     const result = {
       status: 'duplicate',
-      reason: 'smiles_already_minted',
+      reason: isCrispr ? 'grna_already_minted' : 'smiles_already_minted',
       previous_mint: prev,
     };
     process.stdout.write(JSON.stringify(result) + '\n');
@@ -239,8 +349,6 @@ function saveRegistry(registryPath, registry) {
     target_id:         args.targetId,
     target_name:       args.targetName,
     uniprot_id:        args.uniprotId,
-    smiles:            args.smiles,
-    affinity:          Number(args.affinity),
     miner_wallet:      args.minerWallet,
     validator_tx:      args.validatorTx,
     timestamp:         args.timestamp,
@@ -249,14 +357,37 @@ function saveRegistry(registryPath, registry) {
     mint_tx:           mintTx,
     foundation_wallet: args.foundationWallet,
     cluster,
+    // Modality-specific fields
+    ...(isCrispr ? {
+      modality:          'crispr_grna',
+      grna_sequence:     seqKey,
+      gene_name:         args.geneName || args.targetId.replace('_CRISPR', ''),
+      cancer_indication: args.cancerIndication || '',
+      on_target_score:   Number(args.grnaOnTarget  || 0),
+      off_target_score:  Number(args.grnaOffTarget || 0),
+      delivery_score:    Number(args.grnaDelivery  || 0),
+      affinity:          Number(args.affinity),
+    } : {
+      modality:  'small_molecule',
+      smiles:    seqKey,
+      affinity:  Number(args.affinity),
+    }),
   };
 
   registry.discoveries.push(entry);
-  registry.smiles_index[smilesKey] = {
+
+  // Index by the sequence key in the correct gate
+  const indexEntry = {
     discovery_number: entry.discovery_number,
     mint_address:     mintAddr,
     mint_tx:          mintTx,
   };
+  if (isCrispr) {
+    registry.grna_index[seqKey] = indexEntry;
+  } else {
+    registry.smiles_index[seqKey] = indexEntry;
+  }
+
   registry.target_counts[args.targetId] =
     (registry.target_counts[args.targetId] || 0) + 1;
 

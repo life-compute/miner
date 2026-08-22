@@ -444,7 +444,7 @@ def _load_best_cached(target_id: str, top_n: int = 5) -> list[str]:
 def pick_grna(
     target: dict,
     n: int = 50,
-) -> tuple[str, float, str]:
+) -> tuple[str, float, str, dict]:
     """
     Generate candidates, score them, return the best as a submission tuple.
 
@@ -455,18 +455,25 @@ def pick_grna(
 
     Returns
     -------
-    (grna_sequence, affinity_kcalmol, "crispr_generated")
-    where affinity_kcalmol ∈ [−8.0, −6.0] (higher magnitude = better).
+    (grna_sequence, affinity_kcalmol, "crispr_generated", scores_dict)
+    where affinity_kcalmol ∈ [−8.0, −6.0] (higher magnitude = better) and
+    scores_dict has keys: on_target, off_target, delivery (all floats 0–1.1).
     """
     target_id = target.get("id", "UNKNOWN")
     candidates = generate_grna_candidates(target_id, n=n)
     if not candidates:
         # Fallback: return a random sequence with neutral score
-        return _random_20mer(), -6.5, "crispr_generated"
+        neutral = {"on_target": 0.5, "off_target": 1.0, "delivery": 0.7}
+        return _random_20mer(), -6.5, "crispr_generated", neutral
 
     best = candidates[0]
     grna_seq = best["seq"]
     affinity  = best["affinity"]
+    scores    = {
+        "on_target":  best["on_target"],
+        "off_target": best["off_target"],
+        "delivery":   best["delivery"],
+    }
 
     # Persist all scored candidates to JSONL for future mutation seeding
     try:
@@ -490,7 +497,7 @@ def pick_grna(
         f"on={best['on_target']:.3f} off={best['off_target']:.3f} "
         f"del={best['delivery']:.3f} aff={affinity:.3f} kcal/mol"
     )
-    return grna_seq, affinity, "crispr_generated"
+    return grna_seq, affinity, "crispr_generated", scores
 
 
 # ── CRISPR target definitions ─────────────────────────────────────────────────
@@ -508,6 +515,7 @@ CRISPR_TARGETS: list[dict] = [
         "difficulty_tier":   3,
         "target_score_threshold": -7.0,
         "crispr_notes":      "codons 175, 248, 249, 273",
+        "cancer_indication": "colorectal, lung, breast, ovarian",
     },
     {
         "id":                "KRAS_CRISPR",
@@ -519,6 +527,7 @@ CRISPR_TARGETS: list[dict] = [
         "difficulty_tier":   3,
         "target_score_threshold": -7.0,
         "crispr_notes":      "codon 12 G12C/G12D/G12V",
+        "cancer_indication": "pancreatic, colorectal, lung",
     },
     {
         "id":                "BCL2_CRISPR",
@@ -530,6 +539,7 @@ CRISPR_TARGETS: list[dict] = [
         "difficulty_tier":   3,
         "target_score_threshold": -7.0,
         "crispr_notes":      "BH3 domain",
+        "cancer_indication": "B-cell lymphoma, CLL",
     },
     {
         "id":                "MYC_CRISPR",
@@ -541,6 +551,7 @@ CRISPR_TARGETS: list[dict] = [
         "difficulty_tier":   3,
         "target_score_threshold": -7.0,
         "crispr_notes":      "MYC transactivation domain (Mb1/Mb2)",
+        "cancer_indication": "Burkitt lymphoma, TNBC, neuroblastoma",
     },
     {
         "id":                "EGFR_CRISPR",
@@ -552,6 +563,7 @@ CRISPR_TARGETS: list[dict] = [
         "difficulty_tier":   3,
         "target_score_threshold": -7.0,
         "crispr_notes":      "exon 19 Del746-750 / exon 21 L858R",
+        "cancer_indication": "non-small-cell lung cancer (NSCLC)",
     },
     {
         "id":                "HER2_CRISPR",
@@ -563,6 +575,7 @@ CRISPR_TARGETS: list[dict] = [
         "difficulty_tier":   3,
         "target_score_threshold": -7.0,
         "crispr_notes":      "exon 20 insertion hotspot / kinase domain",
+        "cancer_indication": "breast, gastric",
     },
     {
         "id":                "BRCA1_CRISPR",
@@ -574,6 +587,7 @@ CRISPR_TARGETS: list[dict] = [
         "difficulty_tier":   3,
         "target_score_threshold": -7.0,
         "crispr_notes":      "RING domain + exon 11 truncating mutations",
+        "cancer_indication": "breast, ovarian",
     },
     {
         "id":                "PDL1_CRISPR",
@@ -585,6 +599,7 @@ CRISPR_TARGETS: list[dict] = [
         "difficulty_tier":   3,
         "target_score_threshold": -7.0,
         "crispr_notes":      "IgV domain exon 2-3",
+        "cancer_indication": "NSCLC, melanoma, urothelial",
     },
     {
         "id":                "TERT_CRISPR",
@@ -596,6 +611,7 @@ CRISPR_TARGETS: list[dict] = [
         "difficulty_tier":   3,
         "target_score_threshold": -7.0,
         "crispr_notes":      "promoter C228T/C250T + TEN domain",
+        "cancer_indication": "glioblastoma, bladder, thyroid",
     },
     {
         "id":                "CDK4_CRISPR",
@@ -607,6 +623,7 @@ CRISPR_TARGETS: list[dict] = [
         "difficulty_tier":   3,
         "target_score_threshold": -7.0,
         "crispr_notes":      "R24C/H hotspot + kinase domain",
+        "cancer_indication": "liposarcoma, melanoma, glioblastoma",
     },
 ]
 
@@ -646,5 +663,5 @@ if __name__ == "__main__":
         print(f"{c['seq']:<22} {c['on_target']:>6.3f} {c['off_target']:>6.3f} "
               f"{c['delivery']:>6.3f} {c['combined']:>6.3f} {c['affinity']:>8.3f}")
 
-    grna, aff, src = pick_grna(dummy, n=args.n)
+    grna, aff, src, scores = pick_grna(dummy, n=args.n)
     print(f"\n→ Best: {grna}  affinity={aff:.3f} kcal/mol  source={src}")
