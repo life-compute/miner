@@ -149,6 +149,24 @@ BOLTZ_SEED = 68   # included in on-chain submission so validators reproduce the 
 # Sequences below this are logged and skipped — not submitted.
 CRISPR_MIN_COMBINED: float = 0.85
 
+# ── Tokenomics constants (mirrors constants.rs) ───────────────────────────────
+# Initial rewards per tier before any epoch-based halving.
+REWARD_EASY_LIFE:   float = 1.0
+REWARD_MEDIUM_LIFE: float = 5.0
+REWARD_HARD_LIFE:   float = 25.0
+REWARD_CRISPR_LIFE: float = 7.0   # gRNA knockout targets (CPU-scored)
+REWARD_MRNA_LIFE:   float = 25.0  # mRNA silencing targets
+HALVING_INTERVAL:   int   = 210_000  # epochs per halving (~1 yr on mainnet)
+
+def current_epoch_reward(base_life: float, epoch: int) -> float:
+    """Return the current effective reward after epoch-based halving.
+
+    Mirrors rewards.rs Layer 0: base >> (epoch // HALVING_INTERVAL), min 1 raw unit.
+    Result is in $LIFE (not raw units).  Supply/hit halvings are on-chain only.
+    """
+    halvings = epoch // HALVING_INTERVAL
+    return max(base_life / (2 ** halvings), 1 / 1_000_000)  # 1 raw unit floor
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
@@ -1588,8 +1606,9 @@ def main():
                         if resp and resp.get("tx"):
                             log.info(f"[CRISPR] ✔ tx: {resp['tx']}")
                             tx_sig_crispr = resp["tx"]
-                            # CRISPR targets are all tier 3 (HARD) = 25 LIFE
-                            _crispr_stats["life_earned"] += 25.0
+                            # CRISPR targets are all tier Crispr = 7 LIFE initial reward.
+                            # Supply/hit halvings are applied on-chain by mint_reward.rs.
+                            _crispr_stats["life_earned"] += REWARD_CRISPR_LIFE
                             _crispr_stats["molecules_screened"] += 1
                         elif resp and resp.get("status") == "already_submitted":
                             log.info("[CRISPR] Already submitted this epoch")
@@ -1623,6 +1642,11 @@ def main():
 
         threading.Thread(target=_crispr_loop, daemon=True, name="crispr-grna").start()
         log.info(f"[CRISPR] Background gRNA thread started ({len(_CRISPR_TARGETS)} CRISPR targets)")
+        log.info(
+            f"[TOKENOMICS] Rewards — Easy: {REWARD_EASY_LIFE} | Medium: {REWARD_MEDIUM_LIFE} | "
+            f"Hard: {REWARD_HARD_LIFE} | CRISPR: {REWARD_CRISPR_LIFE} | mRNA: {REWARD_MRNA_LIFE} $LIFE "
+            f"(halves every {HALVING_INTERVAL:,} epochs, ~1 yr on mainnet)"
+        )
     else:
         log.warning("[CRISPR] life_crispr unavailable — CRISPR scoring disabled")
 
