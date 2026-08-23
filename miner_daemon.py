@@ -356,9 +356,12 @@ _DISC_RESULT = bytes([0xd6, 0x73, 0xa5, 0x67, 0x43, 0xd3, 0x2f, 0x58])
 _NETWORK_STATS_CACHE: dict = {}
 _NETWORK_STATS_TTL   = 120
 
-# NetworkConfig PDA — seeds: [b"network_config"], program DzcQHhTP…
-# Derived once at module load; change if PROGRAM_ID changes.
-_NETWORK_CONFIG_PDA = "3cp9veeRTsqnXWSJYw2jqhRVeeKcaEkp4Pb2md9GJXPi"
+# NetworkConfig PDA — seeds: [b"network_config"], program 74RHjg1z…
+# Derived from: PublicKey.findProgramAddressSync([Buffer.from("network_config")], PROG_ID)
+# Confirmed via life_submit.js logs: "networkConfig PDA: BgW8KxfMmEEDPwuQiXUBdUATXqtSVT3TYDhf9qXDpbrt"
+# Old stale value "3cp9veeRTsqnXWSJYw2jqhRVeeKcaEkp4Pb2md9GJXPi" was from a prior deployment
+# and froze at epoch=1, causing the CRISPR thread to get stuck after 3/3 submissions.
+_NETWORK_CONFIG_PDA = "BgW8KxfMmEEDPwuQiXUBdUATXqtSVT3TYDhf9qXDpbrt"
 
 # Slots per 24 h (400 ms/slot × 216 000 = 86 400 s).
 _SLOTS_PER_DAY = 216_000
