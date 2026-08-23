@@ -219,6 +219,10 @@ class SubmissionMemory:
                 bs  = row.get("fp_bs", "")
                 if not smi or smi in self._smiles:
                     continue
+                # Skip CRISPR gRNA rows — they are DNA sequences, not SMILES,
+                # and will cause RDKit parse errors / None fingerprints.
+                if row.get("target_type") == "CRISPR" or row.get("source") == "crispr_generated":
+                    continue
                 fp = _fp_from_bitstring(bs) if bs else morgan_fingerprint(smi)
                 if fp is None:
                     continue

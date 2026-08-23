@@ -833,6 +833,7 @@ def _discovery_top10_threshold(target_id: str, current_affinity: float) -> bool:
     exist (first few hits always qualify on novelty alone).
     """
     boltz_jsonl = WORK_DIR / "output" / "life_boltz_scores.jsonl"
+    is_crispr_target = target_id.endswith("_CRISPR")
     scores: list[float] = []
     try:
         with boltz_jsonl.open() as fh:
@@ -844,6 +845,14 @@ def _discovery_top10_threshold(target_id: str, current_affinity: float) -> bool:
                 if row.get("target_id") != target_id:
                     continue
                 if row.get("source") in ("ref", "reference"):
+                    continue
+                # Skip rows whose molecule_type doesn't match the target class
+                # (prevents CRISPR gRNA affinities polluting protein percentiles
+                # and stops gRNA strings from being fed to the SMILES parser)
+                row_type = row.get("target_type", "protein")
+                if is_crispr_target and row_type != "CRISPR":
+                    continue
+                if not is_crispr_target and row_type == "CRISPR":
                     continue
                 aff = row.get("affinity")
                 if isinstance(aff, (int, float)):
