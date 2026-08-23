@@ -492,7 +492,7 @@ function LiveScoringFeedPanel({ feed }) {
 
       {/* scrollable table */}
       <div style={{ overflowX: 'auto' }}>
-        <div style={{ minWidth: '520px' }}>
+        <div style={{ minWidth: '520px', minHeight: '420px' }}>
           <div style={{ display: 'grid',
                         gridTemplateColumns: '70px 60px 160px 72px 72px 42px 52px',
                         gap: '8px', padding: '4px 0 6px',
@@ -1371,6 +1371,177 @@ function ProteinNetPanel({ proteinnet }) {
   )
 }
 
+/* ─── CRISPR GUIDE RNA OPTIMIZATION panel ───────────────────── */
+function CrisprPanel({ crispr }) {
+  if (!crispr) return null
+  const BLUE = '#00bfff'
+  const blueDim  = 'rgba(0,191,255,0.55)'
+  const blueFaint = 'rgba(0,191,255,0.12)'
+  const blueBorder = 'rgba(0,191,255,0.25)'
+
+  const glow = (c, r) => `0 0 ${r}px ${c}`
+
+  const { latest, recent = [], total_evaluated = 0, best_combined = null } = crispr
+
+  const bar = (val, color) => {
+    const pct = val != null ? Math.round(val * 100) : 0
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ flex: 1, height: 3, background: 'rgba(0,191,255,0.12)', borderRadius: 2 }}>
+          <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 2,
+                        boxShadow: glow(color, 4), transition: 'width 0.4s ease' }} />
+        </div>
+        <span style={{ color: BLUE, fontFamily: T.mono, fontSize: 11, minWidth: 38, textAlign: 'right' }}>
+          {val != null ? val.toFixed(4) : '—'}
+        </span>
+      </div>
+    )
+  }
+
+  const seqDisplay = seq => {
+    if (!seq) return '—'
+    // Colour code ACGT
+    const palette = { A: '#00ff41', C: BLUE, G: '#ff69b4', T: '#ffa500', U: '#9d00ff' }
+    return seq.split('').map((ch, i) => (
+      <span key={i} style={{ color: palette[ch] ?? BLUE }}>{ch}</span>
+    ))
+  }
+
+  function ageFmt(iso) {
+    if (!iso) return ''
+    const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+    if (s < 60)   return `${s}s ago`
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`
+    return `${Math.floor(s / 3600)}h ago`
+  }
+
+  return (
+    <Panel style={{ border: `1px solid ${blueBorder}`, boxShadow: glow(BLUE, 2) }}>
+      {/* header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: BLUE, boxShadow: glow(BLUE, 6) }} />
+          <span style={{ color: BLUE, fontFamily: T.mono, fontSize: 11, letterSpacing: '0.15em', fontWeight: 700,
+                         textShadow: glow(BLUE, 4) }}>
+            CRISPR // GUIDE RNA OPTIMIZATION
+          </span>
+        </div>
+        <span style={{ color: blueDim, fontFamily: T.mono, fontSize: 10 }}>
+          {total_evaluated.toLocaleString()} evaluated
+        </span>
+      </div>
+
+      {/* summary stats */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 14 }}>
+        {[
+          { label: 'CURRENT TARGET',  val: latest?.target_id ?? '—',   color: BLUE },
+          { label: 'BEST COMBINED',   val: best_combined != null ? best_combined.toFixed(4) : '—', color: BLUE },
+          { label: 'LATEST RESULT',   val: latest ? (latest.hit ? 'HIT ✓' : 'MISS ✗') : '—',
+            color: latest?.hit ? '#00ff41' : '#ff4444' },
+        ].map(({ label, val, color }) => (
+          <div key={label} style={{ background: blueFaint, border: `1px solid ${blueBorder}`,
+                                    padding: '8px 10px', borderRadius: 2 }}>
+            <div style={{ color: blueDim, fontSize: 9, letterSpacing: '0.2em', marginBottom: 4 }}>{label}</div>
+            <div style={{ color, fontFamily: T.mono, fontSize: 13, fontWeight: 700,
+                          textShadow: glow(color, 3) }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* latest guide detail */}
+      {latest && (
+        <div style={{ background: 'rgba(0,191,255,0.05)', border: `1px solid ${blueBorder}`,
+                      padding: '10px 12px', marginBottom: 14, borderRadius: 2 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ color: blueDim, fontSize: 9, letterSpacing: '0.2em' }}>LATEST gRNA — 20-mer</span>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ color: blueDim, fontSize: 9 }}>source: crispr_generated</span>
+              <span style={{ color: latest.hit ? '#00ff41' : '#ff4444', fontFamily: T.mono, fontSize: 11,
+                             fontWeight: 700, padding: '1px 6px',
+                             border: `1px solid ${latest.hit ? '#00ff41' : '#ff4444'}`,
+                             borderRadius: 2, textShadow: glow(latest.hit ? '#00ff41' : '#ff4444', 3) }}>
+                {latest.hit ? 'HIT' : 'MISS'}
+              </span>
+            </div>
+          </div>
+          {/* sequence */}
+          <div style={{ fontFamily: T.mono, fontSize: 13, letterSpacing: '0.12em', marginBottom: 10,
+                        lineHeight: 1.5, wordBreak: 'break-all' }}>
+            {seqDisplay(latest.grna_seq)}
+          </div>
+          {/* score bars */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {[
+              { label: 'ON-TARGET',       val: latest.on_target,  color: '#00ff41' },
+              { label: 'OFF-TARGET RISK', val: latest.off_target, color: '#ffa500' },
+              { label: 'DELIVERY',        val: latest.delivery,   color: BLUE      },
+            ].map(({ label, val, color }) => (
+              <div key={label} style={{ display: 'grid', gridTemplateColumns: '110px 1fr', alignItems: 'center', gap: 8 }}>
+                <span style={{ color: blueDim, fontSize: 9, letterSpacing: '0.15em' }}>{label}</span>
+                {bar(val, color)}
+              </div>
+            ))}
+            <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', alignItems: 'center', gap: 8, marginTop: 3,
+                          borderTop: `1px solid ${blueBorder}`, paddingTop: 5 }}>
+              <span style={{ color: BLUE, fontSize: 9, letterSpacing: '0.15em', fontWeight: 700 }}>COMBINED</span>
+              {bar(latest.combined, BLUE)}
+            </div>
+          </div>
+          {/* affinity */}
+          <div style={{ marginTop: 8, display: 'flex', gap: 16 }}>
+            <div>
+              <span style={{ color: blueDim, fontSize: 9, letterSpacing: '0.15em' }}>AFFINITY </span>
+              <span style={{ color: BLUE, fontFamily: T.mono, fontSize: 12, fontWeight: 700 }}>
+                {latest.affinity != null ? `${latest.affinity.toFixed(4)} kcal/mol` : '—'}
+              </span>
+            </div>
+            <div>
+              <span style={{ color: blueDim, fontSize: 9, letterSpacing: '0.15em' }}>EVALUATED </span>
+              <span style={{ color: blueDim, fontFamily: T.mono, fontSize: 10 }}>
+                {ageFmt(latest.ts)}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* scrollable feed — last 10 */}
+      <div style={{ color: blueDim, fontSize: 9, letterSpacing: '0.2em', marginBottom: 6 }}>
+        LAST 10 EVALUATIONS
+      </div>
+      <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4,
+                    paddingRight: 2 }}>
+        {recent.length === 0 && (
+          <div style={{ color: blueDim, fontSize: 10, padding: '8px 0' }}>No evaluations yet.</div>
+        )}
+        {recent.map((r, i) => (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto',
+                                alignItems: 'center', gap: 8,
+                                padding: '5px 8px', background: i === 0 ? blueFaint : 'transparent',
+                                border: `1px solid ${i === 0 ? blueBorder : 'transparent'}`,
+                                borderRadius: 2, fontSize: 10 }}>
+            <span style={{ fontFamily: T.mono, color: BLUE, letterSpacing: '0.08em',
+                           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {r.grna_seq || '—'}
+            </span>
+            <span style={{ color: blueDim, fontFamily: T.mono, fontSize: 9, whiteSpace: 'nowrap' }}>
+              {r.target_id}
+            </span>
+            <span style={{ fontFamily: T.mono, color: BLUE, fontSize: 11 }}>
+              {r.combined != null ? r.combined.toFixed(4) : '—'}
+            </span>
+            <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, padding: '0 4px',
+                           color: r.hit ? '#00ff41' : '#ff4444',
+                           textShadow: glow(r.hit ? '#00ff41' : '#ff4444', 2) }}>
+              {r.hit ? 'HIT' : 'MISS'}
+            </span>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  )
+}
+
 function PublicArtPanel({ art }) {
   if (!art) return null
   const { ready=false, n_rows=0, r2=null, ts=null } = art
@@ -2054,6 +2225,7 @@ export default function App() {
   const [priv, setPriv] = useState(null)
   const [feed, setFeed] = useState([])
   const [pulse, setPulse] = useState(null)
+  const [crispr, setCrispr] = useState(null)
   const [tick, setTick] = useState(null)
   const [local, setLocal] = useState(false)
 
@@ -2096,6 +2268,19 @@ export default function App() {
     }
     pollPulse()
     const id = setInterval(pollPulse, 5000)
+    return () => clearInterval(id)
+  }, [])
+
+  // CRISPR poll — every 5s
+  useEffect(() => {
+    async function pollCrispr() {
+      try {
+        const r = await fetch('/crispr?' + Date.now())
+        if (r.ok) setCrispr(await r.json())
+      } catch {}
+    }
+    pollCrispr()
+    const id = setInterval(pollCrispr, 5000)
     return () => clearInterval(id)
   }, [])
 
@@ -2150,8 +2335,11 @@ export default function App() {
             <GpuPowerPanel />
             {gpuWorkers.length > 1 && <GpuWorkersPanel workers={gpuWorkers} />}
             <TargetsPanel     targets={tgts} />
-            <div style={{ gridColumn: 'span 3' }}>
+            {/* LIVE SCORING FEED (left) + CRISPR panel (right) — side by side, full width */}
+            <div style={{ gridColumn: '1 / -1', display: 'grid',
+                          gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <LiveScoringFeedPanel feed={feed} />
+              <CrisprPanel          crispr={crispr} />
             </div>
 
             <div style={S.sectionLabel}>

@@ -508,10 +508,10 @@ http.createServer(async (req, res) => {
     return;
   }
 
-  /* /feed — public: last 20 raw boltz scores, newest first */
+  /* /feed — public: last 30 raw boltz scores, newest first */
   if (url === '/feed') {
     try {
-      const rows = tailJsonl(path.join(OUT, 'life_boltz_scores.jsonl'), 20)
+      const rows = tailJsonl(path.join(OUT, 'life_boltz_scores.jsonl'), 30)
         .reverse()  // newest first
         .map(r => ({
           ts:          r.ts ? new Date(r.ts * 1000).toISOString() : null,
@@ -567,6 +567,40 @@ http.createServer(async (req, res) => {
     try {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(buildPrivateStats()));
+    } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: String(e) })); }
+    return;
+  }
+
+  /* /crispr — public: last 10 CRISPR evaluations + summary */
+  if (url === '/crispr') {
+    try {
+      const rows = tailJsonl(path.join(OUT, 'life_crispr_scores.jsonl'), 10000);
+      const recent = rows.slice(-10).reverse().map(r => ({
+        target_id:  r.target_id  ?? '—',
+        grna_seq:   r.grna_seq   ?? '',
+        on_target:  typeof r.on_target  === 'number' ? Math.round(r.on_target  * 10000) / 10000 : null,
+        off_target: typeof r.off_target === 'number' ? Math.round(r.off_target * 10000) / 10000 : null,
+        delivery:   typeof r.delivery   === 'number' ? Math.round(r.delivery   * 10000) / 10000 : null,
+        combined:   typeof r.combined   === 'number' ? Math.round(r.combined   * 10000) / 10000 : null,
+        affinity:   typeof r.affinity   === 'number' ? Math.round(r.affinity   * 10000) / 10000 : null,
+        hit:        typeof r.combined   === 'number' && r.combined >= 0.5,
+        source:     'crispr_generated',
+        ts:         r.ts ? new Date(r.ts * 1000).toISOString() : null,
+      }));
+      const latest = recent[0] ?? null;
+      const allCombined = rows.map(r => r.combined).filter(v => typeof v === 'number');
+      const best = allCombined.length ? Math.max(...allCombined) : null;
+      res.writeHead(200, {
+        'Content-Type':                'application/json',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(JSON.stringify({
+        latest,
+        recent,
+        total_evaluated: rows.length,
+        best_combined:   best !== null ? Math.round(best * 10000) / 10000 : null,
+        ts: Date.now(),
+      }));
     } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: String(e) })); }
     return;
   }
