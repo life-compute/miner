@@ -2334,10 +2334,10 @@ export default function App() {
             <LifeEarnedPanel  earned={life} />
             <GpuPowerPanel />
             {gpuWorkers.length > 1 && <GpuWorkersPanel workers={gpuWorkers} />}
-            <TargetsPanel     targets={tgts} />
-            {/* LIVE SCORING FEED (left) + CRISPR panel (right) — side by side, full width */}
+            {/* ACTIVE TARGETS | LIVE SCORING FEED | CRISPR — three panels, one row */}
             <div style={{ gridColumn: '1 / -1', display: 'grid',
-                          gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                          gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+              <TargetsPanel         targets={tgts} />
               <LiveScoringFeedPanel feed={feed} />
               <CrisprPanel          crispr={crispr} />
             </div>
