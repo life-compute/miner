@@ -757,7 +757,8 @@ def _boltz_score_to_affinity(boltz_score) -> float | None:
 
 # ── On-chain submission ───────────────────────────────────────────────────────
 def submit_on_chain(target_id_num: int, smiles: str, affinity: float,
-                    boltz_seed: int = BOLTZ_SEED) -> dict | None:
+                    boltz_seed: int = BOLTZ_SEED,
+                    molecule_type: str = "protein") -> dict | None:
     """Submit a result on-chain, trying seq slots 0→1→2 until one is free.
 
     The on-chain program allows MAX_SUBMISSIONS_PER_EPOCH=3 per miner per epoch
@@ -765,6 +766,13 @@ def submit_on_chain(target_id_num: int, smiles: str, affinity: float,
     seq=0 means slot 0 is filled by the first HIT and every subsequent call
     returns already_submitted — even for a different target.  We retry seq=1
     then seq=2 so each epoch can record up to 3 distinct results.
+
+    molecule_type: "protein" | "mRNA" | "CRISPR"
+      - protein/mRNA: affinity is Boltz2 kcal/mol, boltz_seed identifies the run.
+      - CRISPR: affinity is the combined three-score (on_target × off_target ×
+        delivery), negated to satisfy the on-chain < 0.0 guard.  boltz_seed is
+        0 (no GPU run).  The JS helper logs moleculeType so validators can route
+        the submission to the correct scoring handler.
     """
     for seq in range(3):  # slots 0, 1, 2
         args = {
@@ -772,6 +780,7 @@ def submit_on_chain(target_id_num: int, smiles: str, affinity: float,
             "minerKeypair": MINER_KEYPAIR, "idlPath": str(IDL_PATH),
             "programId": PROGRAM_ID, "targetIdNum": target_id_num,
             "smiles": smiles, "affinity": affinity, "boltzSeed": boltz_seed,
+            "moleculeType": molecule_type,
             "seq": seq,
         }
         try:
@@ -1559,7 +1568,14 @@ def main():
                         )
                     elif hit and tid in _CRISPR_TARGET_ID_MAP:
                         log.info(f"[CRISPR] HIT — submitting {tid} on-chain...")
-                        resp = submit_on_chain(_CRISPR_TARGET_ID_MAP[tid], grna_seq, affinity, boltz_seed=BOLTZ_SEED)
+                        # affinity is already the negated combined score from score_grna
+                        # (range ≈ −8.9…−6.0), which satisfies the on-chain < 0.0 guard.
+                        # boltz_seed=0: no GPU run involved.
+                        # molecule_type="CRISPR": signals validator to use gRNA scoring logic.
+                        resp = submit_on_chain(
+                            _CRISPR_TARGET_ID_MAP[tid], grna_seq, affinity,
+                            boltz_seed=0, molecule_type="CRISPR",
+                        )
                         if resp and resp.get("tx"):
                             log.info(f"[CRISPR] ✔ tx: {resp['tx']}")
                             tx_sig_crispr = resp["tx"]
