@@ -308,6 +308,9 @@ def _load_top_boltz(n: int) -> list:
             val = row.get("boltz_score")
             if not smi or val is None:
                 continue
+            # Skip CRISPR gRNA rows — DNA sequences are not valid SMILES
+            if row.get("target_type") == "CRISPR" or row.get("source") == "crispr_generated":
+                continue
             val = float(val)
             if smi not in best or val > float(best[smi]["boltz_score"]):
                 best[smi] = row

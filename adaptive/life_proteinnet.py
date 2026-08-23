@@ -132,6 +132,9 @@ def _load_boltz_rows(target_id: str) -> list[dict]:
             smiles = row.get("smiles", "")
             if not smiles:
                 continue
+            # Skip CRISPR gRNA rows — DNA sequences are not valid SMILES
+            if row.get("target_type") == "CRISPR" or row.get("source") == "crispr_generated":
+                continue
             rows.append(row)
     except Exception as e:
         log.debug(f"[PROTEINNET] _load_boltz_rows({target_id}): {e}")
