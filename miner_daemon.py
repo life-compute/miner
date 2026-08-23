@@ -53,6 +53,16 @@ except Exception as _crispr_err:
     _CRISPR_TARGETS       = []
     _CRISPR_TARGET_ID_MAP = {}
 
+# ── CRISPR Boltz2 GPU scorer ───────────────────────────────────────────────────
+try:
+    from adaptive.life_crispr_boltz import build_crispr_boltz_input_yaml
+    _CRISPR_BOLTZ_AVAILABLE = True
+except Exception as _crispr_boltz_err:
+    _CRISPR_BOLTZ_AVAILABLE = False
+
+    def build_crispr_boltz_input_yaml(grna_20mer: str) -> str:  # type: ignore[misc]
+        raise RuntimeError("life_crispr_boltz not available")
+
 # ── LIFE PULSE — continuous Sobol molecular sweep ─────────────────────────────
 try:
     from adaptive.life_pulse import (
@@ -778,6 +788,161 @@ def _boltz_score_to_affinity(boltz_score) -> float | None:
     if boltz_score is None:
         return None
     return round(-float(boltz_score) * 30.0, 3)
+
+
+# ── Boltz2 CRISPR ternary-complex scoring ────────────────────────────────────
+_CRISPR_BOLTZ_HELPER = """\
+import sys, json, hashlib, time, shutil, os, tempfile
+from pathlib import Path
+
+sys.path.insert(0, "{nova_dir}")
+
+from boltz.main import predict
+
+args     = json.loads(sys.argv[1])
+grna_seq = args["grna_seq"]
+mol_id   = args["mol_id"]
+in_dir   = Path(args["in_dir"])
+out_dir  = Path(args["out_dir"])
+
+try:
+    predict(
+        data=str(in_dir),
+        out_dir=str(out_dir),
+        recycling_steps=1,
+        sampling_steps=25,
+        diffusion_samples=1,
+        output_format="mmcif",
+        seed=args.get("seed", 68),
+        override=True,
+        num_workers=0,
+        no_kernels=True,
+    )
+    result = {{"ok": True}}
+except Exception as e:
+    result = {{"ok": False, "error": str(e)}}
+
+print(json.dumps(result))
+"""
+
+def run_boltz2_crispr_scoring(grna_seq: str) -> dict:
+    """
+    Run Boltz2 GPU inference on a single CRISPR gRNA using the 3-chain ternary complex
+    (SpCas9 REC1 200aa, full sgRNA 96nt, target protospacer 23nt).
+
+    Returns dict with:
+        boltz_score     float | None   (= iptm; higher = better predicted complex)
+        affinity_kcal   float | None   (−6.0 − 3.0 × iptm, kcal/mol-like range −6…−9)
+        iptm            float | None   (interface predicted TM-score, 0–1)
+        ptm             float | None
+        confidence_score float | None
+        model           str            "boltz2-gpu-crispr"
+        error           str | None     (set on failure)
+
+    Mirrors run_boltz2_scoring() subprocess pattern.
+    Fallback to None on any error — caller uses analytical score in that case.
+    """
+    import hashlib as _hashlib
+    import shutil as _shutil
+
+    if not _CRISPR_BOLTZ_AVAILABLE:
+        return {"boltz_score": None, "affinity_kcal": None, "model": "boltz2-gpu-crispr",
+                "error": "life_crispr_boltz not available"}
+
+    # Deterministic mol_id from gRNA sequence
+    mol_id = int(_hashlib.sha256(grna_seq.encode()).hexdigest()[:8], 16) % (2**31 - 1)
+
+    # Create temp dirs for this run
+    with tempfile.TemporaryDirectory(prefix="life-crispr-boltz-") as tmp_root:
+        tmp_path = Path(tmp_root)
+        in_dir   = tmp_path / "inputs"
+        out_dir  = tmp_path / "outputs"
+        in_dir.mkdir()
+        out_dir.mkdir()
+
+        # Write 3-chain YAML
+        try:
+            yaml_content = build_crispr_boltz_input_yaml(grna_seq)
+            yaml_path = in_dir / f"{mol_id}_crispr.yaml"
+            yaml_path.write_text(yaml_content)
+        except Exception as e:
+            return {"boltz_score": None, "affinity_kcal": None, "model": "boltz2-gpu-crispr",
+                    "error": f"YAML build failed: {e}"}
+
+        # Write and run helper script
+        helper_src = _CRISPR_BOLTZ_HELPER.format(nova_dir=str(NOVA_DIR))
+        args_json  = json.dumps({
+            "grna_seq": grna_seq, "mol_id": mol_id,
+            "in_dir": str(in_dir), "out_dir": str(out_dir),
+            "seed": BOLTZ_SEED,
+        })
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False,
+                                         prefix="life-crispr-helper-") as f:
+            f.write(helper_src)
+            helper_path = f.name
+        try:
+            r = subprocess.run(
+                [str(NOVA_VENV), helper_path, args_json],
+                capture_output=True, text=True, timeout=300,
+                cwd=str(NOVA_DIR),
+            )
+        finally:
+            os.unlink(helper_path)
+
+        if r.returncode != 0:
+            log.warning(f"  [CRISPR-Boltz2] stderr: {r.stderr[-400:]}")
+            return {"boltz_score": None, "affinity_kcal": None, "model": "boltz2-gpu-crispr",
+                    "error": r.stderr[-200:]}
+
+        # Parse subprocess result
+        helper_ok = False
+        for line in reversed(r.stdout.strip().splitlines()):
+            try:
+                hres = json.loads(line)
+                if not hres.get("ok", False):
+                    log.warning(f"  [CRISPR-Boltz2] predict() error: {hres.get('error')}")
+                    return {"boltz_score": None, "affinity_kcal": None,
+                            "model": "boltz2-gpu-crispr", "error": hres.get("error")}
+                helper_ok = True
+                break
+            except Exception:
+                continue
+
+        if not helper_ok:
+            log.warning(f"  [CRISPR-Boltz2] stdout unparseable: {r.stdout[-200:]}")
+            return {"boltz_score": None, "affinity_kcal": None, "model": "boltz2-gpu-crispr",
+                    "error": "stdout unparseable"}
+
+        # Parse Boltz2 output from the predictions directory
+        predictions_dir = out_dir / "boltz_results_inputs" / "predictions"
+        if not predictions_dir.exists():
+            log.warning("  [CRISPR-Boltz2] predictions dir missing")
+            return {"boltz_score": None, "affinity_kcal": None, "model": "boltz2-gpu-crispr",
+                    "error": "predictions dir missing"}
+
+        from adaptive.life_crispr_boltz import parse_crispr_boltz_affinity
+        parsed = parse_crispr_boltz_affinity(predictions_dir, mol_id, "crispr")
+        if parsed is None:
+            log.warning("  [CRISPR-Boltz2] affinity parse returned None")
+            return {"boltz_score": None, "affinity_kcal": None, "model": "boltz2-gpu-crispr",
+                    "error": "affinity parse None"}
+
+        log.info(
+            f"  [CRISPR-Boltz2] gRNA={grna_seq[:12]}… "
+            f"iptm={parsed.get('iptm')} "
+            f"ptm={parsed.get('ptm')} "
+            f"confidence={parsed.get('confidence_score')} "
+            f"kcal={parsed.get('affinity_kcal')}"
+        )
+        return {
+            "boltz_score":      parsed.get("boltz_score"),   # = iptm
+            "affinity_kcal":    parsed.get("affinity_kcal"),
+            "iptm":             parsed.get("iptm"),
+            "ptm":              parsed.get("ptm"),
+            "confidence_score": parsed.get("confidence_score"),
+            "model":            "boltz2-gpu-crispr",
+            "error":            None,
+        }
 
 
 # ── On-chain submission ───────────────────────────────────────────────────────
@@ -1544,8 +1709,10 @@ def main():
         threading.Thread(target=_pnet_retrain_loop, daemon=True, name="proteinnet-retrain").start()
         log.info("[PROTEINNET] Background retrain thread started (every 5 min)")
 
-    # ── CRISPR background scoring thread ──────────────────────────────────────
-    # Runs entirely on CPU (<1 ms per gRNA); never blocks the GPU Boltz2 loop.
+    # ── CRISPR background scoring thread (Boltz2 GPU mode) ────────
+    # One gRNA per epoch per target is run through Boltz2 GPU inference.
+    # Analytical scoring (pick_grna) acts as a pre-filter (top candidate only).
+    # Falls back to analytical affinity if Boltz2 fails or is unavailable.
     # Shared mutable counter: main stats loop reads these to include CRISPR
     # earnings in the dashboard $LIFE total without a threading.Lock (GIL-safe
     # for float/int reads on CPython).
@@ -1614,18 +1781,49 @@ def main():
                     tid    = target["id"]
                     thresh = target.get("target_score_threshold", -7.0)
 
-                    # ── Generate with dedup exclusion ──────────────────────────
-                    grna_seq, affinity, source, grna_scores = crispr_pick_grna(
+                    # ── Step 1: Analytical pre-filter — top-1 candidate ────────────────────
+                    # pick_grna() scores N candidates analytically (off-target seed check,
+                    # GC content, stem-loop) and returns the best.  We use n=8 — enough
+                    # for the pre-filter; Boltz2 GPU only runs on the single winner.
+                    grna_seq, analytical_affinity, source, grna_scores = crispr_pick_grna(
                         target,
-                        n=50,
+                        n=8,
                         dedup_history=_dedup,
                         current_epoch=current_epoch,
                     )
 
+                    # ── Step 2: Boltz2 GPU inference (3-chain ternary complex) ─────────────
+                    # SpCas9 REC1 200aa (Chain A) + full sgRNA 96nt (Chain B)
+                    # + protospacer+PAM 23nt (Chain C).  Affinity binder = Chain B.
+                    # Falls back to analytical_affinity if Boltz2 is unavailable or fails.
+                    affinity        = analytical_affinity
+                    boltz_model     = "analytical"
+                    boltz_result: dict = {}
+                    if _CRISPR_BOLTZ_AVAILABLE:
+                        log.info(
+                            f"[CRISPR] {tid} | Running Boltz2 GPU on gRNA={grna_seq[:12]}…"
+                        )
+                        boltz_result = run_boltz2_crispr_scoring(grna_seq)
+                        boltz_kcal   = boltz_result.get("affinity_kcal")
+                        if boltz_kcal is not None:
+                            affinity    = boltz_kcal
+                            boltz_model = "boltz2-gpu-crispr"
+                            log.info(
+                                f"[CRISPR] {tid} | Boltz2 affinity={affinity:.4f} kcal/mol "
+                                f"(analytical was {analytical_affinity:.4f})"
+                            )
+                        else:
+                            log.warning(
+                                f"[CRISPR] {tid} | Boltz2 failed ({boltz_result.get('error')}) "
+                                "— falling back to analytical affinity"
+                            )
+                    else:
+                        log.debug("[CRISPR] Boltz2 unavailable — using analytical affinity")
+
                     hit = affinity <= thresh
                     log.info(
                         f"[CRISPR] {tid} | gRNA: {grna_seq} | "
-                        f"aff={affinity:.3f} | epoch={current_epoch} | "
+                        f"aff={affinity:.4f} | model={boltz_model} | epoch={current_epoch} | "
                         f"subs_this_epoch={_epoch_submissions}/{CRISPR_MAX_SUBMISSIONS_PER_EPOCH} | "
                         f"{'✔ HIT' if hit else '✘ miss'}"
                     )
@@ -1636,15 +1834,19 @@ def main():
                         _boltz_jsonl.parent.mkdir(exist_ok=True)
                         with _boltz_jsonl.open("a") as _fh:
                             _fh.write(json.dumps({
-                                "ts":          time.time(),
-                                "target_id":   tid,
-                                "smiles":      grna_seq,        # gRNA sequence in the SMILES field
-                                "boltz_score": affinity,        # combined score as proxy
-                                "affinity":    affinity,
-                                "hit":         hit,
-                                "source":      source,          # "crispr_generated"
-                                "target_type": "CRISPR",
-                                "epoch":       current_epoch,
+                                "ts":                          time.time(),
+                                "target_id":                   tid,
+                                "smiles":                      grna_seq,
+                                "boltz_score":        boltz_result.get("boltz_score", analytical_affinity),
+                                "affinity":           affinity,
+                                "iptm":               boltz_result.get("iptm"),
+                                "confidence_score":   boltz_result.get("confidence_score"),
+                                "analytical_affinity": analytical_affinity,
+                                "model":              boltz_model,
+                                "hit":                         hit,
+                                "source":                      source,
+                                "target_type":                 "CRISPR",
+                                "epoch":                       current_epoch,
                             }) + "\n")
                     except Exception as _je:
                         log.debug(f"[CRISPR] JSONL write failed: {_je}")
@@ -1663,14 +1865,17 @@ def main():
                             f"{_CRISPR_DEDUP_WINDOW} epochs — skipping (dedup)"
                         )
                     elif hit and tid in _CRISPR_TARGET_ID_MAP:
-                        log.info(f"[CRISPR] HIT — submitting {tid} on-chain...")
-                        # affinity is already the negated combined score from score_grna
-                        # (range ≈ −8.9…−6.0), which satisfies the on-chain < 0.0 guard.
-                        # boltz_seed=0: no GPU run involved.
+                        # boltz_seed=BOLTZ_SEED when Boltz2 ran (validator can reproduce);
+                        # boltz_seed=0 for analytical fallback path.
                         # molecule_type="CRISPR": signals validator to use gRNA scoring logic.
+                        _submit_seed = BOLTZ_SEED if boltz_model == "boltz2-gpu-crispr" else 0
+                        log.info(
+                            f"[CRISPR] HIT — submitting {tid} on-chain "
+                            f"(model={boltz_model} seed={_submit_seed}) ..."
+                        )
                         resp = submit_on_chain(
                             _CRISPR_TARGET_ID_MAP[tid], grna_seq, affinity,
-                            boltz_seed=0, molecule_type="CRISPR",
+                            boltz_seed=_submit_seed, molecule_type="CRISPR",
                         )
                         if resp and resp.get("tx"):
                             log.info(f"[CRISPR] ✔ tx: {resp['tx']}")
