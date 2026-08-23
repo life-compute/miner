@@ -143,6 +143,12 @@ NOVA_VENV  = NOVA_DIR / ".venv" / "bin" / "python"
 MSA_DIR    = Path("/mnt/minos-drive/life-compute-miner/data/msa_files")
 BOLTZ_SEED = 68   # included in on-chain submission so validators reproduce the score
 
+# Minimum combined gRNA score required before submitting on-chain.
+# combined = on_target × off_target × delivery (range 0–1.1).
+# 0.85 requires a strong hotspot alignment + low off-target risk + good GC content.
+# Sequences below this are logged and skipped — not submitted.
+CRISPR_MIN_COMBINED: float = 0.85
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
@@ -1522,9 +1528,15 @@ def main():
                     except Exception as _je:
                         log.debug(f"[CRISPR] JSONL write failed: {_je}")
 
-                    # On-chain submission — gates on registered target ID
+                    # On-chain submission — gates on registered target ID and quality threshold
                     tx_sig_crispr: str | None = None
-                    if hit and tid in _CRISPR_TARGET_ID_MAP:
+                    combined_score = grna_scores.get("combined", 0.0)
+                    if hit and combined_score < CRISPR_MIN_COMBINED:
+                        log.info(
+                            f"[CRISPR] {tid} | combined={combined_score:.3f} < "
+                            f"{CRISPR_MIN_COMBINED} threshold — skipping submission"
+                        )
+                    elif hit and tid in _CRISPR_TARGET_ID_MAP:
                         log.info(f"[CRISPR] HIT — submitting {tid} on-chain...")
                         resp = submit_on_chain(_CRISPR_TARGET_ID_MAP[tid], grna_seq, affinity, boltz_seed=BOLTZ_SEED)
                         if resp and resp.get("tx"):
@@ -1580,6 +1592,7 @@ def main():
     # Targets 0-9 are registered on devnet (MAX_TARGETS=10).
     # Targets 10-29 are protein targets pending on-chain registration (MAX_TARGETS ≥ 30).
     # Targets 2000-2029 are mRNA targets (MAX_TARGETS=2030, registered on-chain 2026-08-20).
+    # Targets 3000-3009 are CRISPR gRNA targets (MAX_TARGETS=3010, registered on-chain 2026-08-23).
     # All 60 targets are screened every cycle; on-chain submission is gated below.
     TARGET_ID_MAP = {
         # ── Protein targets (on-chain IDs 0-29) ──────────────────────────────
