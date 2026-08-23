@@ -41,9 +41,11 @@ except Exception as _e:
 # ── CRISPR gRNA optimizer ─────────────────────────────────────────────────────
 try:
     from adaptive.life_crispr import (
-        pick_grna            as crispr_pick_grna,
-        CRISPR_TARGETS       as _CRISPR_TARGETS,
-        CRISPR_TARGET_ID_MAP as _CRISPR_TARGET_ID_MAP,
+        pick_grna                  as crispr_pick_grna,
+        CRISPR_TARGETS             as _CRISPR_TARGETS,
+        CRISPR_TARGET_ID_MAP       as _CRISPR_TARGET_ID_MAP,
+        CrisprDeduplicationHistory as _CrisprDeduplicationHistory,
+        CRISPR_DEDUP_WINDOW        as _CRISPR_DEDUP_WINDOW,
     )
     _CRISPR_AVAILABLE = True
 except Exception as _crispr_err:
@@ -148,6 +150,11 @@ BOLTZ_SEED = 68   # included in on-chain submission so validators reproduce the 
 # 0.85 requires a strong hotspot alignment + low off-target risk + good GC content.
 # Sequences below this are logged and skipped — not submitted.
 CRISPR_MIN_COMBINED: float = 0.85
+
+# Maximum on-chain CRISPR submissions per epoch across all targets combined.
+# Prevents spamming the chain when all 10 targets repeatedly return the same hotspots.
+# Resets each time the on-chain epoch number advances.
+CRISPR_MAX_SUBMISSIONS_PER_EPOCH: int = 3
 
 # ── Tokenomics constants (mirrors constants.rs) ───────────────────────────────
 # Initial rewards per tier before any epoch-based halving.
@@ -1545,26 +1552,82 @@ def main():
     _crispr_stats: dict = {"life_earned": 0.0, "molecules_screened": 0}
     if _CRISPR_AVAILABLE:
         def _crispr_loop():
-            """Score CRISPR targets continuously in a background daemon thread."""
+            """Score CRISPR targets continuously in a background daemon thread.
+
+            Deduplication
+            -------------
+            A CrisprDeduplicationHistory instance prevents the same gRNA sequence from
+            being submitted for the same target more than once in any rolling 100-epoch
+            window.  The history is persisted to output/crispr_dedup_history.json so it
+            survives daemon restarts.
+
+            Per-epoch submission cap
+            ------------------------
+            CRISPR_MAX_SUBMISSIONS_PER_EPOCH (default 3) limits on-chain submissions
+            per epoch across ALL CRISPR targets combined.  The counter resets when
+            _read_epoch_state() reports a higher epoch number than the last seen value.
+            """
             log.info("[CRISPR] Background gRNA scoring thread started")
             _crispr_sub_memory = SubmissionMemory() if _TOOLS_AVAILABLE else None
             _crispr_target_idx = 0
+
+            # Persistent deduplication: skips gRNAs submitted in the last N epochs
+            _dedup = _CrisprDeduplicationHistory()
+
+            # Per-epoch submission cap: reset when epoch advances
+            _epoch_submissions: int = 0      # count of on-chain CRISPR txns this epoch
+            _last_seen_epoch:   int = -1     # last on-chain epoch we observed
+
             while True:
                 try:
                     if not _CRISPR_TARGETS:
                         time.sleep(60)
                         continue
+
+                    # ── Read current on-chain epoch ────────────────────────────
+                    epoch_state = _read_epoch_state()
+                    current_epoch: int = (
+                        epoch_state["current_epoch"] if epoch_state else _last_seen_epoch
+                    )
+                    if current_epoch > _last_seen_epoch:
+                        if _last_seen_epoch >= 0:
+                            log.info(
+                                f"[CRISPR] Epoch advanced {_last_seen_epoch} → {current_epoch} "
+                                f"— resetting per-epoch submission counter "
+                                f"(was {_epoch_submissions}/{CRISPR_MAX_SUBMISSIONS_PER_EPOCH})"
+                            )
+                        _epoch_submissions = 0
+                        _last_seen_epoch   = current_epoch
+
+                    # ── Per-epoch submission cap ───────────────────────────────
+                    if _epoch_submissions >= CRISPR_MAX_SUBMISSIONS_PER_EPOCH:
+                        log.debug(
+                            f"[CRISPR] Epoch {current_epoch}: submission cap reached "
+                            f"({_epoch_submissions}/{CRISPR_MAX_SUBMISSIONS_PER_EPOCH}) "
+                            "— skipping generation until next epoch"
+                        )
+                        time.sleep(30)
+                        continue
+
                     target = _CRISPR_TARGETS[_crispr_target_idx % len(_CRISPR_TARGETS)]
                     _crispr_target_idx += 1
-                    tid = target["id"]
+                    tid    = target["id"]
                     thresh = target.get("target_score_threshold", -7.0)
 
-                    grna_seq, affinity, source, grna_scores = crispr_pick_grna(target, n=50)
+                    # ── Generate with dedup exclusion ──────────────────────────
+                    grna_seq, affinity, source, grna_scores = crispr_pick_grna(
+                        target,
+                        n=50,
+                        dedup_history=_dedup,
+                        current_epoch=current_epoch,
+                    )
 
                     hit = affinity <= thresh
                     log.info(
                         f"[CRISPR] {tid} | gRNA: {grna_seq} | "
-                        f"aff={affinity:.3f} | {'✔ HIT' if hit else '✘ miss'}"
+                        f"aff={affinity:.3f} | epoch={current_epoch} | "
+                        f"subs_this_epoch={_epoch_submissions}/{CRISPR_MAX_SUBMISSIONS_PER_EPOCH} | "
+                        f"{'✔ HIT' if hit else '✘ miss'}"
                     )
 
                     # Append to shared scoring JSONL feed
@@ -1581,17 +1644,23 @@ def main():
                                 "hit":         hit,
                                 "source":      source,          # "crispr_generated"
                                 "target_type": "CRISPR",
+                                "epoch":       current_epoch,
                             }) + "\n")
                     except Exception as _je:
                         log.debug(f"[CRISPR] JSONL write failed: {_je}")
 
-                    # On-chain submission — gates on registered target ID and quality threshold
+                    # On-chain submission — gates on quality threshold + dedup + epoch cap
                     tx_sig_crispr: str | None = None
                     combined_score = grna_scores.get("combined", 0.0)
                     if hit and combined_score < CRISPR_MIN_COMBINED:
                         log.info(
                             f"[CRISPR] {tid} | combined={combined_score:.3f} < "
                             f"{CRISPR_MIN_COMBINED} threshold — skipping submission"
+                        )
+                    elif hit and _dedup.is_recently_submitted(tid, grna_seq, current_epoch):
+                        log.info(
+                            f"[CRISPR] {tid} | {grna_seq[:12]}… submitted within last "
+                            f"{_CRISPR_DEDUP_WINDOW} epochs — skipping (dedup)"
                         )
                     elif hit and tid in _CRISPR_TARGET_ID_MAP:
                         log.info(f"[CRISPR] HIT — submitting {tid} on-chain...")
@@ -1606,12 +1675,22 @@ def main():
                         if resp and resp.get("tx"):
                             log.info(f"[CRISPR] ✔ tx: {resp['tx']}")
                             tx_sig_crispr = resp["tx"]
+                            # Record in dedup history to prevent resubmission
+                            _dedup.mark_submitted(tid, grna_seq, current_epoch)
+                            _epoch_submissions += 1
+                            log.info(
+                                f"[CRISPR] Epoch {current_epoch}: "
+                                f"{_epoch_submissions}/{CRISPR_MAX_SUBMISSIONS_PER_EPOCH} "
+                                "CRISPR submissions used"
+                            )
                             # CRISPR targets are all tier Crispr = 7 LIFE initial reward.
                             # Supply/hit halvings are applied on-chain by mint_reward.rs.
                             _crispr_stats["life_earned"] += REWARD_CRISPR_LIFE
                             _crispr_stats["molecules_screened"] += 1
                         elif resp and resp.get("status") == "already_submitted":
                             log.info("[CRISPR] Already submitted this epoch")
+                            # Still record in dedup so we don't keep trying this seq
+                            _dedup.mark_submitted(tid, grna_seq, current_epoch)
                         else:
                             log.info(f"[CRISPR] HIT but {tid} not yet registered on-chain (ID 3000-3009 pending)")
                     elif hit:

@@ -58,6 +58,99 @@ OUTPUT_DIR = LIFE_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 CRISPR_JSONL = OUTPUT_DIR / "life_crispr_scores.jsonl"
 
+# ── Submission deduplication ───────────────────────────────────────────────────
+CRISPR_DEDUP_PATH   = OUTPUT_DIR / "crispr_dedup_history.json"
+CRISPR_DEDUP_WINDOW = 100   # epochs: do not re-submit the same gRNA within this window
+
+
+class CrisprDeduplicationHistory:
+    """
+    Persistent per-target gRNA submission tracker.
+
+    Stores {target_id: {grna_seq: epoch_submitted}} in a JSON file on disk.
+    Thread-safe via GIL (single writer — the CRISPR background thread).
+
+    Typical use
+    -----------
+    dedup = CrisprDeduplicationHistory()
+
+    # Before picking:
+    novel_candidates = dedup.filter_novel(target_id, candidates, current_epoch)
+
+    # After successful on-chain submission:
+    dedup.mark_submitted(target_id, grna_seq, current_epoch)
+    """
+
+    def __init__(
+        self,
+        path: Path = CRISPR_DEDUP_PATH,
+        window: int = CRISPR_DEDUP_WINDOW,
+    ) -> None:
+        self._path   = path
+        self._window = window
+        # {target_id: {grna_seq_upper: epoch_int}}
+        self._data: dict[str, dict[str, int]] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if self._path.exists():
+            try:
+                self._data = json.loads(self._path.read_text())
+            except Exception:
+                self._data = {}
+
+    def _save(self) -> None:
+        try:
+            self._path.write_text(json.dumps(self._data, indent=2))
+        except Exception as e:
+            log.debug(f"[CRISPR] dedup save failed: {e}")
+
+    def _prune(self, target_id: str, current_epoch: int) -> None:
+        """Drop entries older than the deduplication window."""
+        cutoff = current_epoch - self._window
+        if target_id in self._data:
+            self._data[target_id] = {
+                seq: ep
+                for seq, ep in self._data[target_id].items()
+                if ep > cutoff
+            }
+
+    def mark_submitted(self, target_id: str, grna_seq: str, epoch: int) -> None:
+        """Record that *grna_seq* was submitted for *target_id* at *epoch*."""
+        bucket = self._data.setdefault(target_id, {})
+        bucket[grna_seq.upper()] = epoch
+        self._prune(target_id, epoch)
+        self._save()
+        log.debug(
+            f"[CRISPR] dedup: recorded {grna_seq[:10]}… for {target_id} "
+            f"at epoch {epoch} ({len(bucket)} tracked)"
+        )
+
+    def is_recently_submitted(
+        self, target_id: str, grna_seq: str, current_epoch: int
+    ) -> bool:
+        """Return True if *grna_seq* was submitted within the dedup window."""
+        last_ep = self._data.get(target_id, {}).get(grna_seq.upper())
+        if last_ep is None:
+            return False
+        return (current_epoch - last_ep) <= self._window
+
+    def filter_novel(
+        self,
+        target_id: str,
+        candidates: list[dict],
+        current_epoch: int,
+    ) -> list[dict]:
+        """Return the subset of *candidates* not seen in the last window epochs."""
+        return [
+            c for c in candidates
+            if not self.is_recently_submitted(target_id, c["seq"], current_epoch)
+        ]
+
+    def submitted_count(self, target_id: str) -> int:
+        """Total tracked submissions for *target_id* (across all epochs in the window)."""
+        return len(self._data.get(target_id, {}))
+
 # ── Nucleotide complement map ──────────────────────────────────────────────────
 _COMP = str.maketrans("ACGTacgt", "TGCAtgca")
 
@@ -365,53 +458,79 @@ def _hotspot_neighborhood(hotspot: str, radius: int = 3) -> list[str]:
     return results
 
 
-def generate_grna_candidates(target_id: str, n: int = 50) -> list[dict]:
+def generate_grna_candidates(
+    target_id: str,
+    n: int = 50,
+    excluded_seqs: set[str] | None = None,
+) -> list[dict]:
     """
     Generate *n* gRNA candidate sequences for *target_id*.
 
-    Three methods:
-    1. Known hotspot windows (up to 8 per target)
+    Four methods (tried in priority order):
+    1. Known hotspot windows (up to 8 per target) — only if not excluded
     2. Neighborhood sampling around hotspots (slides + 1-nt substitutions)
-    3. Random 20-mers (remainder)
-    4. Mutation of cached best sequences (if any cached scores exist)
+    3. Mutation of cached best sequences (if any cached scores exist)
+    4. Random 20-mers (remainder / forced exploration fallback)
+
+    Parameters
+    ----------
+    target_id     : CRISPR target ID (key in HOTSPOT_GRNAS)
+    n             : number of candidates to generate and score
+    excluded_seqs : set of already-submitted gRNA sequences (upper-case) to skip
 
     Returns list of dicts: {seq, on_target, off_target, delivery, combined, affinity}
     sorted descending by combined score.
     """
+    excluded  = {s.upper() for s in (excluded_seqs or set())}
     hotspots  = HOTSPOT_GRNAS.get(target_id, [])
     seen:  set[str] = set()
     cands: list[str] = []
 
-    # Method 1: known hotspots
-    for h in hotspots:
-        if h not in seen and len(h) == 20:
-            seen.add(h)
-            cands.append(h)
+    def _add(seq: str) -> bool:
+        s = seq.upper()
+        if s in seen or s in excluded or len(seq) != 20:
+            return False
+        seen.add(s)
+        cands.append(seq)
+        return True
 
-    # Method 2: neighborhood of each hotspot
+    # Method 1: known hotspot windows (skip if already submitted)
     for h in hotspots:
-        for nb in _hotspot_neighborhood(h, radius=2):
-            if nb not in seen and len(nb) == 20:
-                seen.add(nb)
-                cands.append(nb)
-                if len(cands) >= n * 2:
-                    break
+        _add(h)
 
-    # Method 4: mutants of best cached sequences
+    # Method 2: neighborhood of each hotspot (higher mutation radius = more exploration)
+    # Use radius=3 so we reach sequences that are further from the hotspot core,
+    # giving the generator genuine diversity when all radius-2 neighbors are exhausted.
+    for h in hotspots:
+        for nb in _hotspot_neighborhood(h, radius=3):
+            _add(nb)
+            if len(cands) >= n * 2:
+                break
+
+    # Method 3: mutants of best cached sequences
     best_cached = _load_best_cached(target_id, top_n=5)
     for seq in best_cached:
-        for _ in range(4):
-            m = _mutate_20mer(seq, n_mutations=random.randint(1, 3))
-            if m not in seen:
-                seen.add(m)
-                cands.append(m)
+        for _ in range(6):   # more mutants when hotspot coverage is tight
+            _add(_mutate_20mer(seq, n_mutations=random.randint(1, 4)))
 
-    # Method 3: random remainder
-    while len(cands) < n:
-        r = _random_20mer()
-        if r not in seen:
-            seen.add(r)
-            cands.append(r)
+    # Method 4: random remainder (guaranteed exploration path — always produces new seqs)
+    _random_attempts = 0
+    while len(cands) < n and _random_attempts < n * 20:
+        _random_attempts += 1
+        _add(_random_20mer())
+
+    if len(cands) == 0:
+        # All candidates were excluded and random generation also failed (very unlikely).
+        # Fall back to purely random pool without the exclusion filter.
+        log.warning(
+            f"[CRISPR] {target_id}: all {n} candidates excluded — "
+            "generating fresh random pool (dedup window may be full)"
+        )
+        for _ in range(n):
+            seq = _random_20mer()
+            if seq not in seen:
+                seen.add(seq)
+                cands.append(seq)
 
     # Score all candidates
     scored = []
@@ -455,14 +574,20 @@ def _load_best_cached(target_id: str, top_n: int = 5) -> list[str]:
 def pick_grna(
     target: dict,
     n: int = 50,
+    dedup_history: "CrisprDeduplicationHistory | None" = None,
+    current_epoch: int = 0,
 ) -> tuple[str, float, str, dict]:
     """
-    Generate candidates, score them, return the best as a submission tuple.
+    Generate candidates, filter already-submitted sequences, return the best.
 
     Parameters
     ----------
-    target : target dict with at least {"id": "TP53_CRISPR"}
-    n      : number of candidates to generate (default 50)
+    target        : target dict with at least {"id": "TP53_CRISPR"}
+    n             : number of candidates to generate (default 50)
+    dedup_history : CrisprDeduplicationHistory instance (optional).  When provided,
+                    sequences submitted within the last CRISPR_DEDUP_WINDOW epochs
+                    for this target are excluded from the candidate pool.
+    current_epoch : current on-chain epoch number (used with dedup_history)
 
     Returns
     -------
@@ -471,11 +596,37 @@ def pick_grna(
     scores_dict has keys: on_target, off_target, delivery (all floats 0–1.1).
     """
     target_id = target.get("id", "UNKNOWN")
-    candidates = generate_grna_candidates(target_id, n=n)
+
+    # Build the excluded-sequence set from dedup history for this target
+    excluded: set[str] = set()
+    if dedup_history is not None:
+        excluded = {
+            seq.upper()
+            for seq, ep in dedup_history._data.get(target_id, {}).items()
+            if dedup_history.is_recently_submitted(target_id, seq, current_epoch)
+        }
+        if excluded:
+            log.debug(
+                f"[CRISPR] {target_id}: dedup excluding {len(excluded)} "
+                f"recently-submitted gRNAs (window={CRISPR_DEDUP_WINDOW} epochs)"
+            )
+
+    candidates = generate_grna_candidates(target_id, n=n, excluded_seqs=excluded)
     if not candidates:
         # Fallback: return a random sequence with neutral score
         neutral = {"on_target": 0.5, "off_target": 1.0, "delivery": 0.7}
         return _random_20mer(), -6.5, "crispr_generated", neutral
+
+    # Apply dedup filter to the scored list (redundant if generator did its job,
+    # but protects against the random-fallback path producing an excluded seq)
+    if dedup_history is not None and excluded:
+        novel_candidates = [
+            c for c in candidates
+            if c["seq"].upper() not in excluded
+        ]
+        if novel_candidates:
+            candidates = novel_candidates
+        # else: all scored candidates are excluded (extremely rare) — proceed with any
 
     best = candidates[0]
     grna_seq = best["seq"]
