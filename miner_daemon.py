@@ -758,43 +758,60 @@ def _boltz_score_to_affinity(boltz_score) -> float | None:
 # ── On-chain submission ───────────────────────────────────────────────────────
 def submit_on_chain(target_id_num: int, smiles: str, affinity: float,
                     boltz_seed: int = BOLTZ_SEED) -> dict | None:
-    args = {
-        "rpc": SOLANA_RPC, "authKeypair": AUTH_KEYPAIR,
-        "minerKeypair": MINER_KEYPAIR, "idlPath": str(IDL_PATH),
-        "programId": PROGRAM_ID, "targetIdNum": target_id_num,
-        "smiles": smiles, "affinity": affinity, "boltzSeed": boltz_seed,
-    }
-    try:
-        result = subprocess.run(
-            ["node", str(ANCHOR_DIR / "life_submit.js"), json.dumps(args)],
-            capture_output=True, text=True, timeout=120, cwd=str(ANCHOR_DIR))
-        if result.returncode != 0:
-            log.error(f"submit node FAILED (rc={result.returncode})")
-            if result.stderr.strip(): log.error(f"stderr:\n{result.stderr.strip()}")
-            if result.stdout.strip(): log.error(f"stdout:\n{result.stdout.strip()}")
-            return None
-        parsed_resp = None
-        for line in reversed(result.stdout.strip().splitlines()):
-            try:
-                parsed_resp = json.loads(line)
-                break
-            except Exception:
+    """Submit a result on-chain, trying seq slots 0→1→2 until one is free.
+
+    The on-chain program allows MAX_SUBMISSIONS_PER_EPOCH=3 per miner per epoch
+    (seq 0, 1, 2 each derive a distinct resultSubmission PDA).  Always sending
+    seq=0 means slot 0 is filled by the first HIT and every subsequent call
+    returns already_submitted — even for a different target.  We retry seq=1
+    then seq=2 so each epoch can record up to 3 distinct results.
+    """
+    for seq in range(3):  # slots 0, 1, 2
+        args = {
+            "rpc": SOLANA_RPC, "authKeypair": AUTH_KEYPAIR,
+            "minerKeypair": MINER_KEYPAIR, "idlPath": str(IDL_PATH),
+            "programId": PROGRAM_ID, "targetIdNum": target_id_num,
+            "smiles": smiles, "affinity": affinity, "boltzSeed": boltz_seed,
+            "seq": seq,
+        }
+        try:
+            result = subprocess.run(
+                ["node", str(ANCHOR_DIR / "life_submit.js"), json.dumps(args)],
+                capture_output=True, text=True, timeout=120, cwd=str(ANCHOR_DIR))
+            if result.returncode != 0:
+                log.error(f"submit node FAILED seq={seq} (rc={result.returncode})")
+                if result.stderr.strip(): log.error(f"stderr:\n{result.stderr.strip()}")
+                if result.stdout.strip(): log.error(f"stdout:\n{result.stdout.strip()}")
+                return None
+            parsed_resp = None
+            for line in reversed(result.stdout.strip().splitlines()):
+                try:
+                    parsed_resp = json.loads(line)
+                    break
+                except Exception:
+                    continue
+            if result.stderr.strip():
+                level = (log.info if (parsed_resp and parsed_resp.get("status") == "already_submitted")
+                         else log.debug)
+                for diag_line in result.stderr.strip().splitlines():
+                    level(f"[node] {diag_line}")
+            if parsed_resp is None:
+                log.warning(f"submit stdout seq={seq} (no JSON found): {result.stdout.strip()[:500]}")
+                return None
+            # If this seq slot is already occupied, try the next one
+            if parsed_resp.get("status") == "already_submitted":
+                log.info(f"submit: seq={seq} occupied — trying seq={seq + 1}")
                 continue
-        if result.stderr.strip():
-            level = (log.info if (parsed_resp and parsed_resp.get("status") == "already_submitted")
-                     else log.debug)
-            for diag_line in result.stderr.strip().splitlines():
-                level(f"[node] {diag_line}")
-        if parsed_resp is not None:
             return parsed_resp
-        log.warning(f"submit stdout (no JSON found): {result.stdout.strip()[:500]}")
-        return None
-    except subprocess.TimeoutExpired:
-        log.error("submit timed out after 120s")
-        return None
-    except Exception as e:
-        log.error(f"submit exception: {e}")
-        return None
+        except subprocess.TimeoutExpired:
+            log.error(f"submit timed out after 120s (seq={seq})")
+            return None
+        except Exception as e:
+            log.error(f"submit exception seq={seq}: {e}")
+            return None
+    # All three slots occupied this epoch
+    log.info("submit: all 3 seq slots occupied this epoch — result not submitted")
+    return {"status": "already_submitted", "epoch": "?", "seq": "all_full"}
 
 
 # ── Discovery NFT helpers ─────────────────────────────────────────────────────
@@ -1486,6 +1503,10 @@ def main():
 
     # ── CRISPR background scoring thread ──────────────────────────────────────
     # Runs entirely on CPU (<1 ms per gRNA); never blocks the GPU Boltz2 loop.
+    # Shared mutable counter: main stats loop reads these to include CRISPR
+    # earnings in the dashboard $LIFE total without a threading.Lock (GIL-safe
+    # for float/int reads on CPython).
+    _crispr_stats: dict = {"life_earned": 0.0, "molecules_screened": 0}
     if _CRISPR_AVAILABLE:
         def _crispr_loop():
             """Score CRISPR targets continuously in a background daemon thread."""
@@ -1542,6 +1563,9 @@ def main():
                         if resp and resp.get("tx"):
                             log.info(f"[CRISPR] ✔ tx: {resp['tx']}")
                             tx_sig_crispr = resp["tx"]
+                            # CRISPR targets are all tier 3 (HARD) = 25 LIFE
+                            _crispr_stats["life_earned"] += 25.0
+                            _crispr_stats["molecules_screened"] += 1
                         elif resp and resp.get("status") == "already_submitted":
                             log.info("[CRISPR] Already submitted this epoch")
                         else:
@@ -1849,15 +1873,15 @@ def main():
         stats.update({
             "alive": True,
             "current_target": tid,
-            "molecules_screened": molecules_done,
-            "life_earned": life_earned,
+            "molecules_screened": molecules_done + _crispr_stats["molecules_screened"],
+            "life_earned": life_earned + _crispr_stats["life_earned"],
             "targets_contributed": list({t["target"] for t in txs}),
             "transactions": txs[-20:],
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "global": fetch_network_stats(),
         })
         write_stats(stats)
-        log.info(f"Screened: {molecules_done} | $LIFE: {life_earned:.1f} | txs: {len(txs)}")
+        log.info(f"Screened: {molecules_done} | $LIFE: {life_earned + _crispr_stats['life_earned']:.1f} | txs: {len(txs)}")
         log.info(f"Sleeping {POLL_SECONDS}s...")
         time.sleep(POLL_SECONDS)
 
