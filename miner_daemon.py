@@ -159,7 +159,7 @@ BOLTZ_SEED = 68   # included in on-chain submission so validators reproduce the 
 # combined = on_target × off_target × delivery (range 0–1.1).
 # 0.85 requires a strong hotspot alignment + low off-target risk + good GC content.
 # Sequences below this are logged and skipped — not submitted.
-CRISPR_MIN_COMBINED: float = 0.65
+CRISPR_MIN_COMBINED: float = 0.20
 
 # Maximum on-chain CRISPR submissions per epoch across all targets combined.
 # Prevents spamming the chain when all 10 targets repeatedly return the same hotspots.

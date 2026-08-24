@@ -154,12 +154,17 @@ function buildMetadata(args) {
   return args.isCrispr ? buildCrisprMetadata(args) : buildMoleculeMetadata(args);
 }
 
-// ── Minimal off-chain JSON uploader (data URI — no external upload needed) ──
-// Metaplex reads the URI at display time.  We embed metadata inline so the
-// script works without Arweave/IPFS credentials.  A real deployment would swap
-// this for umi.use(irysUploader()) or a pinata call.
-function buildDataUri(meta, args) {
+// ── Off-chain metadata: save to disk + return a short URL ───────────────────
+// Solana transactions have a 1232-byte hard limit.  A base64-encoded JSON blob
+// in the uri field blows this limit (~3700 bytes).  Instead we:
+//   1. Write the full metadata JSON to output/discovery_metadata/<n>.json
+//   2. Return a short canonical URL that fits comfortably inside the tx.
+// The URI is stored on-chain; wallets fetch it at display time.
+// On devnet the URL does not need to be live at mint time — only at display time.
+function buildMetadataUri(meta, args) {
   const isCrispr = Boolean(args.isCrispr);
+  const discNum  = Number(args.discoveryNumber);
+
   const json = {
     name:        meta.name,
     symbol:      meta.symbol,
@@ -176,8 +181,21 @@ function buildDataUri(meta, args) {
       ],
     },
   };
-  return 'data:application/json;base64,' +
-    Buffer.from(JSON.stringify(json)).toString('base64');
+
+  // Save full metadata locally for reference / future hosting
+  try {
+    const registryDir = path.dirname(args.registryPath);
+    const metaDir     = path.join(registryDir, 'discovery_metadata');
+    if (!fs.existsSync(metaDir)) fs.mkdirSync(metaDir, { recursive: true });
+    const metaPath = path.join(metaDir, `${discNum}.json`);
+    fs.writeFileSync(metaPath, JSON.stringify(json, null, 2));
+    log(`metadata saved → ${metaPath}`);
+  } catch (e) {
+    log(`WARNING: could not save metadata file: ${e.message}`);
+  }
+
+  // Short canonical URL — well under Solana's tx size limit
+  return `https://life-compute.io/discoveries/${discNum}`;
 }
 
 // ── Discovery registry helpers ───────────────────────────────────────────────
@@ -286,7 +304,7 @@ function saveRegistry(registryPath, registry) {
 
   // ── Build metadata ─────────────────────────────────────────────────────────
   const meta    = buildMetadata(args);
-  const dataUri = buildDataUri(meta, args);
+  const metadataUri = buildMetadataUri(meta, args);
   log('NFT name  :', meta.name);
 
   if (dryRun) {
@@ -326,7 +344,7 @@ function saveRegistry(registryPath, registry) {
     mint:         mintSigner,
     name:         meta.name,
     symbol:       meta.symbol,
-    uri:          dataUri,
+    uri:          metadataUri,
     sellerFeeBasisPoints: percentAmount(0),   // 0% royalty; foundation takes 100% of sales
     isMutable:    false,                      // provenance immutable
     tokenOwner:   foundationPk,
