@@ -60,7 +60,7 @@ CRISPR_JSONL = OUTPUT_DIR / "life_crispr_scores.jsonl"
 
 # ── Submission deduplication ───────────────────────────────────────────────────
 CRISPR_DEDUP_PATH   = OUTPUT_DIR / "crispr_dedup_history.json"
-CRISPR_DEDUP_WINDOW = 100   # epochs: do not re-submit the same gRNA within this window
+CRISPR_DEDUP_WINDOW = 50    # epochs: do not re-submit the same gRNA within this window
 
 
 class CrisprDeduplicationHistory:
