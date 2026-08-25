@@ -630,12 +630,21 @@ def pick_grna(
 
     best = candidates[0]
     grna_seq = best["seq"]
-    affinity  = best["affinity"]
-    scores    = {
-        "on_target":  best["on_target"],
-        "off_target": best["off_target"],
-        "delivery":   best["delivery"],
-        "combined":   best["combined"],
+
+    # Always re-score the exact sequence being submitted.
+    # candidates[0] may carry scores from a hotspot window or cached entry that
+    # were computed for a *different* (parent) sequence — e.g. a neighborhood
+    # slide or mutation may inherit the hotspot's combined/affinity if the
+    # scoring dict was reused rather than freshly computed.  Re-scoring here
+    # guarantees the returned affinity and scores dict belong to grna_seq itself.
+    hotspots_for_target = HOTSPOT_GRNAS.get(target_id, [])
+    fresh = score_grna(grna_seq, hotspots_for_target)
+    affinity = fresh["affinity"]
+    scores   = {
+        "on_target":  fresh["on_target"],
+        "off_target": fresh["off_target"],
+        "delivery":   fresh["delivery"],
+        "combined":   fresh["combined"],
     }
 
     # Persist all scored candidates to JSONL for future mutation seeding

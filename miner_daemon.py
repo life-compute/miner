@@ -176,10 +176,25 @@ MSA_DIR    = Path("/mnt/minos-drive/life-compute-miner/data/msa_files")
 BOLTZ_SEED = 68   # included in on-chain submission so validators reproduce the score
 
 # Minimum combined gRNA score required before submitting on-chain.
-# combined = on_target × off_target × delivery (range 0–1.1).
-# 0.85 requires a strong hotspot alignment + low off-target risk + good GC content.
+# combined = on_target × off_target × delivery  (range 0–1.1).
+#
+# Threshold rationale (2026-08-25):
+#   delivery=0.4  (gc < 0.30 or gc > 0.80)  → max combined = 1.1 × 1.0 × 0.4 = 0.44
+#   delivery=0.7  (gc 30–80%, no stem-loop)  → max combined = 1.1 × 1.0 × 0.7 = 0.77
+#
+# 0.45 sits just above the delivery=0.4 ceiling, so high-GC hotspots like MYC
+# (gc≈0.85 → delivery=0.4 → combined≈0.4 even with perfect on/off-target) are
+# correctly rejected.  delivery≥0.7 sequences are unaffected.
 # Sequences below this are logged and skipped — not submitted.
-CRISPR_MIN_COMBINED: float = 0.20
+CRISPR_MIN_COMBINED: float = 0.45
+
+# Minimum delivery score (Score 3) required before submitting on-chain.
+# delivery = 0.4 for gc < 0.30 or gc > 0.80 (out-of-range GC).
+# delivery = 0.5 if out-of-range GC but has stem-loop bonus.
+# delivery = 0.7 for gc 30–80% (normal range).
+# 0.6 sits between 0.5 and 0.7, blocking all out-of-range-GC sequences
+# (with or without stem-loop bonus) while allowing normal-GC sequences through.
+CRISPR_MIN_DELIVERY: float = 0.6
 
 # Maximum on-chain CRISPR submissions per epoch across all targets combined.
 # Prevents spamming the chain when all 10 targets repeatedly return the same hotspots.
@@ -1950,8 +1965,14 @@ def main():
 
                     # On-chain submission — gates on quality threshold + dedup + epoch cap
                     tx_sig_crispr: str | None = None
-                    combined_score = grna_scores.get("combined", 0.0)
-                    if hit and combined_score < CRISPR_MIN_COMBINED:
+                    combined_score  = grna_scores.get("combined",  0.0)
+                    delivery_score  = grna_scores.get("delivery",  0.0)
+                    if hit and delivery_score < CRISPR_MIN_DELIVERY:
+                        log.info(
+                            f"[CRISPR] {tid} | delivery={delivery_score:.3f} < "
+                            f"{CRISPR_MIN_DELIVERY} (out-of-range GC) — skipping submission"
+                        )
+                    elif hit and combined_score < CRISPR_MIN_COMBINED:
                         log.info(
                             f"[CRISPR] {tid} | combined={combined_score:.3f} < "
                             f"{CRISPR_MIN_COMBINED} threshold — skipping submission"
