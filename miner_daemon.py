@@ -42,6 +42,9 @@ except Exception as _e:
 try:
     from adaptive.life_crispr import (
         pick_grna                  as crispr_pick_grna,
+        generate_grna_candidates   as crispr_generate_candidates,
+        score_grna                 as crispr_score_grna,
+        HOTSPOT_GRNAS              as _CRISPR_HOTSPOT_GRNAS,
         CRISPR_TARGETS             as _CRISPR_TARGETS,
         CRISPR_TARGET_ID_MAP       as _CRISPR_TARGET_ID_MAP,
         CrisprDeduplicationHistory as _CrisprDeduplicationHistory,
@@ -52,6 +55,23 @@ except Exception as _crispr_err:
     _CRISPR_AVAILABLE = False
     _CRISPR_TARGETS       = []
     _CRISPR_TARGET_ID_MAP = {}
+    crispr_generate_candidates = None   # type: ignore[assignment]
+    crispr_score_grna          = None   # type: ignore[assignment]
+    _CRISPR_HOTSPOT_GRNAS      = {}     # type: ignore[assignment]
+
+# ── CRISPR-Net — per-target ML pre-screener ───────────────────────────────────
+try:
+    from adaptive.life_crispr_net import (
+        train_all        as _cnet_train_all,
+        pre_screen       as _cnet_pre_screen,
+        get_model_report as _cnet_get_report,
+        should_retrain   as _cnet_should_retrain,
+    )
+    _CNET_AVAILABLE = True
+except Exception as _cnet_err:
+    _CNET_AVAILABLE = False
+    _cnet_train_all = _cnet_pre_screen = _cnet_get_report = _cnet_should_retrain = None  # type: ignore[assignment]
+_CNET_MIN_R2 = 0.5   # minimum R² for CRISPR-Net pre-screening to activate
 
 # ── CRISPR Boltz2 GPU scorer ───────────────────────────────────────────────────
 try:
@@ -1712,6 +1732,19 @@ def main():
         threading.Thread(target=_pnet_retrain_loop, daemon=True, name="proteinnet-retrain").start()
         log.info("[PROTEINNET] Background retrain thread started (every 5 min)")
 
+    # ── CRISPR-Net background retrain loop ─────────────────────────────────────
+    if _CNET_AVAILABLE and _cnet_train_all is not None:
+        _cnet_train_all_fn = _cnet_train_all   # narrow for closure
+        def _cnet_retrain_loop():
+            while True:
+                try:
+                    _cnet_train_all_fn()
+                except Exception as _cnte:
+                    log.debug(f"[CRISPR-NET] retrain error (non-fatal): {_cnte}")
+                time.sleep(300)   # check every 5 min; train_all() is a no-op when up to date
+        threading.Thread(target=_cnet_retrain_loop, daemon=True, name="crispr-net-retrain").start()
+        log.info("[CRISPR-NET] Background retrain thread started (every 5 min)")
+
     # ── CRISPR background scoring thread (Boltz2 GPU mode) ────────
     # One gRNA per epoch per target is run through Boltz2 GPU inference.
     # Analytical scoring (pick_grna) acts as a pre-filter (top candidate only).
@@ -1784,44 +1817,105 @@ def main():
                     tid    = target["id"]
                     thresh = target.get("target_score_threshold", -7.0)
 
-                    # ── Step 1: Analytical pre-filter — top-1 candidate ────────────────────
-                    # pick_grna() scores N candidates analytically (off-target seed check,
-                    # GC content, stem-loop) and returns the best.  We use n=8 — enough
-                    # for the pre-filter; Boltz2 GPU only runs on the single winner.
-                    grna_seq, analytical_affinity, source, grna_scores = crispr_pick_grna(
-                        target,
-                        n=8,
-                        dedup_history=_dedup,
-                        current_epoch=current_epoch,
+                    # ── Step 1: Generate 50 candidates analytically ──────────────────────
+                    # Generate 50 gRNA candidates with the full analytical scorer.
+                    # Build excluded set from dedup history for this target.
+                    _excluded: set[str] = {
+                        seq.upper()
+                        for seq, ep in _dedup._data.get(tid, {}).items()
+                        if _dedup.is_recently_submitted(tid, seq, current_epoch)
+                    }
+                    all_candidates = crispr_generate_candidates(  # type: ignore[misc]
+                        tid, n=50, excluded_seqs=_excluded
                     )
+                    all_seqs = [c["seq"] for c in all_candidates]
 
-                    # ── Step 2: Boltz2 GPU inference (3-chain ternary complex) ─────────────
-                    # SpCas9 REC1 200aa (Chain A) + full sgRNA 96nt (Chain B)
-                    # + protospacer+PAM 23nt (Chain C).  Affinity binder = Chain B.
-                    # Falls back to analytical_affinity if Boltz2 is unavailable or fails.
-                    affinity        = analytical_affinity
-                    boltz_model     = "analytical"
-                    boltz_result: dict = {}
-                    if _CRISPR_BOLTZ_AVAILABLE:
-                        log.info(
-                            f"[CRISPR] {tid} | Running Boltz2 GPU on gRNA={grna_seq[:12]}…"
-                        )
-                        boltz_result = run_boltz2_crispr_scoring(grna_seq)
-                        boltz_kcal   = boltz_result.get("affinity_kcal")
-                        if boltz_kcal is not None:
-                            affinity    = boltz_kcal
-                            boltz_model = "boltz2-gpu-crispr"
+                    # ── Step 1b: CRISPR-Net pre-screen (if model ready, R²≥0.5) ────────
+                    hotspots = _CRISPR_HOTSPOT_GRNAS.get(tid, [])  # type: ignore[union-attr]
+                    if (
+                        _CNET_AVAILABLE
+                        and _cnet_pre_screen is not None
+                        and _cnet_get_report is not None
+                    ):
+                        cnet_report = _cnet_get_report()
+                        cnet_r2     = cnet_report.get("models", {}).get(tid, {}).get("r2")
+                        cnet_status = cnet_report.get("models", {}).get(tid, {}).get("status")
+                        if cnet_status == "ready" and cnet_r2 is not None and cnet_r2 >= _CNET_MIN_R2:
+                            top5_seqs = _cnet_pre_screen(all_seqs, tid, top_n=5)
                             log.info(
-                                f"[CRISPR] {tid} | Boltz2 affinity={affinity:.4f} kcal/mol "
-                                f"(analytical was {analytical_affinity:.4f})"
+                                f"[CRISPR-NET] Pre-screened {len(all_seqs)} → top {len(top5_seqs)} "
+                                f"for {tid} (R²={cnet_r2:.2f})"
+                            )
+                        else:
+                            # Fall back: take top 5 by analytical combined score
+                            top5_seqs = [c["seq"] for c in all_candidates[:5]]
+                            if cnet_r2 is not None:
+                                log.debug(
+                                    f"[CRISPR-NET] {tid} R²={cnet_r2:.2f} < {_CNET_MIN_R2} "
+                                    "— falling back to analytical top-5"
+                                )
+                    else:
+                        top5_seqs = [c["seq"] for c in all_candidates[:5]]
+
+                    # ── Step 2: Boltz2 GPU inference on top-5 candidates ─────────────────
+                    # Run Boltz2 on each of the top-5 seqs; keep the best iptm result.
+                    # Falls back to analytical_affinity if Boltz2 is unavailable or fails.
+                    best_grna_seq          = top5_seqs[0] if top5_seqs else (all_seqs[0] if all_seqs else "")
+                    best_boltz_result: dict = {}
+                    best_affinity: float   = -6.0
+                    best_boltz_model       = "analytical"
+                    source                 = "crispr_generated"
+
+                    # Pre-compute analytical scores for the top-5 for fallback/logging
+                    _seq_to_scores = {c["seq"]: c for c in all_candidates}
+
+                    if _CRISPR_BOLTZ_AVAILABLE and top5_seqs:
+                        for _candidate_seq in top5_seqs:
+                            log.info(
+                                f"[CRISPR] {tid} | Running Boltz2 GPU on gRNA={_candidate_seq[:12]}…"
+                            )
+                            _bres = run_boltz2_crispr_scoring(_candidate_seq)
+                            _bkcal = _bres.get("affinity_kcal")
+                            if _bkcal is not None:
+                                if best_boltz_model == "analytical" or _bkcal < best_affinity:
+                                    best_grna_seq    = _candidate_seq
+                                    best_boltz_result = _bres
+                                    best_affinity    = _bkcal
+                                    best_boltz_model = "boltz2-gpu-crispr"
+                            else:
+                                log.debug(
+                                    f"[CRISPR] {tid} | Boltz2 failed for {_candidate_seq[:12]}… "
+                                    f"({_bres.get('error')}) — skipping"
+                                )
+                        if best_boltz_model == "boltz2-gpu-crispr":
+                            log.info(
+                                f"[CRISPR] {tid} | Best Boltz2 gRNA={best_grna_seq[:12]}… "
+                                f"affinity={best_affinity:.4f} kcal/mol"
                             )
                         else:
                             log.warning(
-                                f"[CRISPR] {tid} | Boltz2 failed ({boltz_result.get('error')}) "
-                                "— falling back to analytical affinity"
+                                f"[CRISPR] {tid} | All {len(top5_seqs)} Boltz2 runs failed "
+                                "— falling back to analytical top candidate"
                             )
                     else:
-                        log.debug("[CRISPR] Boltz2 unavailable — using analytical affinity")
+                        log.debug("[CRISPR] Boltz2 unavailable — using analytical top candidate")
+
+                    # Resolve final analytical scores for the winner
+                    _winner_scores = _seq_to_scores.get(best_grna_seq, {})
+                    grna_scores = {
+                        "on_target":  _winner_scores.get("on_target",  0.5),
+                        "off_target": _winner_scores.get("off_target", 1.0),
+                        "delivery":   _winner_scores.get("delivery",   0.7),
+                        "combined":   _winner_scores.get("combined",   0.0),
+                    }
+                    # Analytical affinity of the winner (for fallback and logging)
+                    analytical_affinity = _winner_scores.get("affinity", -6.5)
+                    if best_boltz_model == "analytical":
+                        best_affinity = analytical_affinity
+                    grna_seq     = best_grna_seq
+                    affinity     = best_affinity
+                    boltz_model  = best_boltz_model
+                    boltz_result = best_boltz_result
 
                     hit = affinity <= thresh
                     log.info(

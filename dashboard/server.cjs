@@ -224,6 +224,24 @@ function buildPublicStats() {
         generated_at: report.generated_at ?? null,
       };
     })(),
+    crispr_net: (() => {
+      const report = readJson(path.join(OUT, 'crispr_net_models', 'crispr_net_report.json')) || {};
+      const models = report.models || {};
+      const entries = Object.entries(models).map(([tid, v]) => ({
+        target_id:    tid,
+        n:            v.n           ?? 0,
+        r2:           v.r2          ?? null,
+        status:       v.status      ?? 'learning',
+        last_trained: v.last_trained ?? null,
+      }));
+      entries.sort((a, b) => (b.r2 ?? -1) - (a.r2 ?? -1));
+      return {
+        n_ready:      report.n_ready      ?? 0,
+        n_total:      report.n_total      ?? 0,
+        models:       entries,
+        generated_at: report.generated_at ?? null,
+      };
+    })(),
   };
 }
 

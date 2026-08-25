@@ -1371,6 +1371,106 @@ function ProteinNetPanel({ proteinnet }) {
   )
 }
 
+/* ─── CRISPR-NET panel ───────────────────────────────────────── */
+function CrisprNetPanel({ crispr_net }) {
+  if (!crispr_net) return null
+  const BLUE       = '#4da6ff'
+  const blueDim    = 'rgba(77,166,255,0.55)'
+  const blueFaint  = 'rgba(77,166,255,0.08)'
+  const blueBorder = 'rgba(77,166,255,0.22)'
+
+  const { n_ready = 0, n_total = 0, models = [], generated_at = null } = crispr_net
+  const lastUpdate = generated_at ? new Date(generated_at * 1000).toLocaleString() : '—'
+
+  function ageFmt(ts) {
+    if (!ts) return '—'
+    const s = Math.floor((Date.now() / 1000) - ts)
+    if (s < 60)   return `${s}s ago`
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`
+    return `${Math.floor(s / 3600)}h ago`
+  }
+
+  const colStyle = { color: blueDim, fontSize: '10px', fontWeight: 700, letterSpacing: '0.05em' }
+  const hdrRow   = {
+    display: 'grid',
+    gridTemplateColumns: '110px 52px 52px 68px 1fr',
+    gap: '4px',
+    padding: '4px 0',
+    borderBottom: `1px solid ${BLUE}33`,
+  }
+
+  return (
+    <Panel accent={BLUE} style={{ gridColumn: '1 / -1',
+      background: `linear-gradient(135deg, ${blueFaint} 0%, rgba(0,0,0,0) 100%)`,
+      border: `1px solid ${blueBorder}` }}>
+      <div style={S.panelTitle}>
+        <span style={{ ...S.titleAccent(BLUE), color: BLUE }}>🔬</span>
+        <span style={{ color: BLUE }}>CRISPR-NET — PER-TARGET MODELS</span>
+        <span style={{ marginLeft: 'auto', ...S.pill(n_ready > 0 ? BLUE : T.textDim), background: `${BLUE}22`, color: BLUE, border: `1px solid ${BLUE}55` }}>
+          {n_ready}/{n_total || 10} READY
+        </span>
+      </div>
+
+      {/* Header row */}
+      <div style={hdrRow}>
+        {['TARGET', 'ROWS', 'R²', 'STATUS', 'LAST TRAINED'].map(h => (
+          <span key={h} style={colStyle}>{h}</span>
+        ))}
+      </div>
+
+      <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
+        {models.length === 0 ? (
+          <div style={{ color: T.textDim, fontSize: '11px', padding: '8px 0' }}>
+            Waiting for ≥15 real Boltz2 iptm scores per target to train models…
+          </div>
+        ) : models.map(m => {
+          const r2Color   = m.r2 != null && m.r2 >= 0.5 ? BLUE
+                          : m.r2 != null && m.r2 >= 0.2 ? T.amber
+                          : T.textDim
+          const statColor = m.status === 'ready' ? BLUE : T.textDim
+          return (
+            <div key={m.target_id} style={{
+              display: 'grid',
+              gridTemplateColumns: '110px 52px 52px 68px 1fr',
+              gap: '4px',
+              padding: '3px 0',
+              borderBottom: `1px solid ${BLUE}15`,
+            }}>
+              <span style={{ color: BLUE, fontWeight: 700, fontSize: '11px',
+                             textShadow: `0 0 6px ${BLUE}88`, fontFamily: T.mono }}>
+                {m.target_id.replace('_CRISPR', '')}
+              </span>
+              <span style={{ color: T.cyan, fontSize: '11px', textAlign: 'right', paddingRight: '8px' }}>
+                {m.n}
+              </span>
+              <span style={{ color: r2Color, fontWeight: 700, fontSize: '11px',
+                             textShadow: `0 0 4px ${r2Color}88` }}>
+                {m.r2 != null ? m.r2.toFixed(2) : '—'}
+              </span>
+              <span style={{ color: statColor, fontSize: '10px', fontWeight: 700,
+                             letterSpacing: '0.05em' }}>
+                {m.status.toUpperCase()}
+              </span>
+              <span style={{ color: T.textDim, fontSize: '11px' }}>
+                {ageFmt(m.last_trained)}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Footer */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px',
+                    fontSize: '10px' }}>
+        <span style={{ color: blueDim }}>
+          CRISPR-NET: {n_ready}/{n_total || 10} models ready · min_rows=15 · retrain_every=10
+        </span>
+        <span style={{ color: T.textDim }}>LAST_SYNC: {lastUpdate}</span>
+      </div>
+    </Panel>
+  )
+}
+
 /* ─── CRISPR GUIDE RNA OPTIMIZATION panel ───────────────────── */
 function CrisprPanel({ crispr }) {
   if (!crispr) return null
@@ -2352,6 +2452,7 @@ export default function App() {
             <PublicArtPanel      art={pub?.art} />
             <ActiveStructurePanel currentTarget={target} />
             <ProteinNetPanel     proteinnet={pub?.proteinnet} />
+            <CrisprNetPanel      crispr_net={pub?.crispr_net} />
 
             {/* LIFE PULSE — always visible (public endpoint) */}
             <div style={S.sectionLabel}>
