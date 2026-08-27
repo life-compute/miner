@@ -1471,6 +1471,128 @@ function CrisprNetPanel({ crispr_net }) {
   )
 }
 
+/* ─── LIFE-BRAIN panel ────────────────────────────────────────── */
+function LifeBrainPanel({ life_brain }) {
+  if (!life_brain) return null
+
+  const PURPLE = '#9d00ff'
+  const GOLD   = '#ffd700'
+  const purpleDim   = 'rgba(157,0,255,0.55)'
+  const purpleFaint = 'rgba(157,0,255,0.06)'
+  const purpleBorder= 'rgba(157,0,255,0.25)'
+  const goldDim     = 'rgba(255,215,0,0.70)'
+
+  const {
+    total_rows = 0, unique_miners = 0,
+    last_trained = null, train_elapsed_s = null,
+    branches = [], any_trusted = false,
+  } = life_brain
+
+  function ageFmt(ts) {
+    if (!ts) return '—'
+    const s = Math.floor(Date.now() / 1000 - ts)
+    if (s < 60)   return `${s}s ago`
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`
+    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m ago`
+  }
+
+  const MODALITY_LABEL = { protein: '🧬 PROTEIN', mrna: '📡 mRNA', crispr: '✂️ CRISPR' }
+  const FALLBACK_LABEL = { protein: 'ProteinNet', mrna: 'ProteinNet', crispr: 'CRISPR-Net' }
+
+  return (
+    <Panel accent={PURPLE} style={{
+      gridColumn: '1 / -1',
+      background: `linear-gradient(135deg, ${purpleFaint} 0%, rgba(0,0,0,0) 100%)`,
+      border: `1px solid ${purpleBorder}`,
+    }}>
+      {/* Title bar */}
+      <div style={S.panelTitle}>
+        <span style={{ ...S.titleAccent(PURPLE), color: PURPLE }}>🧠</span>
+        <span style={{ color: PURPLE }}>LIFE-BRAIN — NETWORK-WIDE SELF-LEARNING</span>
+        <span style={{ marginLeft: 'auto', ...S.pill(any_trusted ? GOLD : purpleDim),
+                        background: any_trusted ? 'rgba(255,215,0,0.12)' : `${PURPLE}22`,
+                        color: any_trusted ? GOLD : purpleDim,
+                        border: `1px solid ${any_trusted ? GOLD : PURPLE}55`,
+                        fontWeight: 700 }}>
+          {any_trusted ? '⚡ BRANCH TRUSTED' : '⏳ ACCUMULATING'}
+        </span>
+      </div>
+
+      {/* Stats row */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '8px',
+                    margin: '8px 0 12px' }}>
+        {[
+          { label: 'NETWORK ROWS', value: total_rows.toLocaleString(), color: PURPLE },
+          { label: 'CONTRIBUTING MINERS', value: unique_miners > 0 ? unique_miners : '—', color: PURPLE },
+          { label: 'LAST RETRAIN', value: ageFmt(last_trained), color: T.textDim },
+          { label: 'TRAIN TIME', value: train_elapsed_s ? `${train_elapsed_s}s` : '—', color: T.textDim },
+        ].map(({ label, value, color }) => (
+          <div key={label} style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '4px',
+                                    padding: '6px 10px', border: `1px solid ${PURPLE}22` }}>
+            <div style={{ color: purpleDim, fontSize: '9px', fontWeight: 700,
+                          letterSpacing: '0.07em', marginBottom: '3px' }}>{label}</div>
+            <div style={{ color, fontSize: '13px', fontWeight: 700,
+                          textShadow: color === PURPLE ? glow(PURPLE, 2) : 'none' }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Branch table */}
+      <div style={{ display: 'grid', gridTemplateColumns: '110px 80px 90px 80px 1fr',
+                    gap: '4px', padding: '4px 0',
+                    borderBottom: `1px solid ${PURPLE}33`, marginBottom: '4px' }}>
+        {['BRANCH', 'ROWS', 'HELD-OUT MAE', 'STATUS', 'SIGNAL / REASON'].map(h => (
+          <span key={h} style={{ color: purpleDim, fontSize: '10px', fontWeight: 700,
+                                  letterSpacing: '0.05em' }}>{h}</span>
+        ))}
+      </div>
+
+      {branches.map(br => {
+        const trusted = br.trusted
+        const statusColor = trusted ? GOLD : (br.n >= 150 ? T.amber : purpleDim)
+        const maeStr = br.brain_mae != null ? br.brain_mae.toFixed(4) : '—'
+        return (
+          <div key={br.name} style={{
+            display: 'grid', gridTemplateColumns: '110px 80px 90px 80px 1fr',
+            gap: '4px', padding: '4px 0',
+            borderBottom: `1px solid ${PURPLE}15`,
+          }}>
+            <span style={{ color: PURPLE, fontWeight: 700, fontSize: '12px',
+                            textShadow: glow(PURPLE, 1) }}>
+              {MODALITY_LABEL[br.name] || br.name.toUpperCase()}
+            </span>
+            <span style={{ color: T.cyan, fontSize: '11px' }}>
+              {br.n}<span style={{ color: T.textDim, fontSize: '10px' }}>/150</span>
+            </span>
+            <span style={{ color: trusted ? GOLD : T.textDim, fontSize: '11px',
+                            fontWeight: trusted ? 700 : 400,
+                            textShadow: trusted ? glow(GOLD, 2) : 'none' }}>{maeStr}</span>
+            <span style={{ color: statusColor, fontSize: '10px', fontWeight: 700,
+                            letterSpacing: '0.05em',
+                            textShadow: trusted ? glow(GOLD, 2) : 'none' }}>
+              {trusted ? '✔ TRUSTED' : br.n >= 150 ? 'EVALUATING' : `NEED ${Math.max(0, 150 - br.n)}`}
+            </span>
+            <span style={{ color: T.textDim, fontSize: '10px',
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {trusted
+                ? `beats ${FALLBACK_LABEL[br.name]}: ${br.reason || ''}`
+                : br.reason || (br.n < 150
+                    ? `accumulating confirmed network-wide submissions`
+                    : `running LOTO cross-validation…`)}
+            </span>
+          </div>
+        )
+      })}
+
+      {/* Footer */}
+      <div style={{ marginTop: '8px', fontSize: '10px', color: purpleDim }}>
+        LIFE-BRAIN ingests ALL miners' confirmed on-chain submissions · trains jointly across modalities ·
+        LOTO CV gates each branch before replacing {'{'}ProteinNet | CRISPR-Net{'}'} pre-screener
+      </div>
+    </Panel>
+  )
+}
+
 /* ─── CRISPR GUIDE RNA OPTIMIZATION panel ───────────────────── */
 function CrisprPanel({ crispr }) {
   if (!crispr) return null
@@ -2453,6 +2575,7 @@ export default function App() {
             <ActiveStructurePanel currentTarget={target} />
             <ProteinNetPanel     proteinnet={pub?.proteinnet} />
             <CrisprNetPanel      crispr_net={pub?.crispr_net} />
+            <LifeBrainPanel      life_brain={pub?.life_brain} />
 
             {/* LIFE PULSE — always visible (public endpoint) */}
             <div style={S.sectionLabel}>

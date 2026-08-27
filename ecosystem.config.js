@@ -30,5 +30,24 @@ module.exports = {
       max_restarts: 10,
       watch: false,
     },
+    {
+      // LIFE-BRAIN — Network-wide self-learning system.
+      // Fully independent of life-miner and life-validator.
+      // CPU-only: CUDA_VISIBLE_DEVICES="" is set inside life_brain_runner.py
+      // before any torch import. Boltz2 GPU resources are never touched.
+      name: 'life-brain',
+      script: 'life_brain_runner.py',
+      interpreter: 'python3',
+      cwd: __dirname,
+      env_file: '.env',            // picks up SOLANA_RPC from the same .env
+      env: {
+        CUDA_VISIBLE_DEVICES: '',  // belt-and-suspenders at the PM2 env level
+      },
+      autorestart: true,
+      max_restarts: 15,
+      exp_backoff_restart_delay: 5000,
+      watch: false,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+    },
   ],
 };

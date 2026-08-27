@@ -108,6 +108,22 @@ except Exception as _ame:
     _AUTO_MSA_AVAILABLE = False
     _auto_msa_err = str(_ame)
 
+# ── LIFE-BRAIN gateway — network-wide self-learning pre-screener ──────────────
+# ISOLATION: only life_brain_gateway.py is imported here.
+# life_brain.py (training) runs in the separate 'life-brain' PM2 process.
+# CUDA_VISIBLE_DEVICES="" is enforced inside life_brain_gateway.py at import time.
+try:
+    from adaptive.life_brain_gateway import (
+        is_trusted          as _lbrain_trusted,
+        pre_screen_smiles   as _lbrain_pre_screen_smiles,
+        pre_screen_crispr   as _lbrain_pre_screen_crispr,
+        get_report          as _lbrain_get_report,
+    )
+    _LBRAIN_AVAILABLE = True
+except Exception as _lbe:
+    _LBRAIN_AVAILABLE = False
+    _lbrain_trusted = _lbrain_pre_screen_smiles = _lbrain_pre_screen_crispr = _lbrain_get_report = None  # type: ignore[assignment]
+
 # ── ProteinNet — per-protein ML pre-screener ──────────────────────────────────
 try:
     from adaptive.life_proteinnet import (
@@ -253,6 +269,18 @@ def _pnet_fill_pool(tid: str) -> None:
             log.debug(f"[PROTEINNET] {tid} R²={r2:.2f} < {_PNET_MIN_R2} — skipping pre-screen (model not ready)")
             return
         sample = random.sample(_zinc_cache, min(_PNET_SCREEN_N, len(_zinc_cache)))
+        # LIFE-BRAIN: if the protein branch is trusted, use it instead of ProteinNet
+        if (
+            _LBRAIN_AVAILABLE
+            and _lbrain_trusted is not None
+            and _lbrain_pre_screen_smiles is not None
+            and _lbrain_trusted("protein")
+        ):
+            lb_result = _lbrain_pre_screen_smiles(sample, int(tid.split("_")[0]) if isinstance(tid, str) and tid[0].isdigit() else 0, "protein", top_n=_PNET_TOP_K)
+            if lb_result is not None:
+                _pnet_pools[tid] = list(lb_result)
+                log.info(f"[LIFE-BRAIN] protein branch pre-screen: {len(sample):,} → top {len(lb_result)} for {tid}")
+                return
         candidates = _pnet_pre_screen(sample, tid, top_n=_PNET_TOP_K)
         _pnet_pools[tid] = list(candidates)
         log.info(f"[PROTEINNET] Pre-screened {len(sample):,} → top {len(candidates)} for {tid} (R²={r2:.2f})")
@@ -352,10 +380,27 @@ def _pick_molecule(target: dict, sub_memory, best_smiles: list[str]) -> tuple[st
             if gen_cands and _PNET_AVAILABLE and _pnet_pre_screen is not None:
                 try:
                     gen_smiles  = [smi for _, smi, _ in gen_cands]
-                    filtered    = _pnet_pre_screen(gen_smiles, tid, top_n=len(gen_smiles))
+                    # LIFE-BRAIN: use protein branch if trusted, fall back to ProteinNet
+                    if (
+                        _LBRAIN_AVAILABLE and _lbrain_trusted is not None
+                        and _lbrain_pre_screen_smiles is not None
+                        and _lbrain_trusted("protein")
+                    ):
+                        try:
+                            _tid_int = int(str(tid).split("_")[0]) if str(tid)[0].isdigit() else 0
+                            lb_filtered = _lbrain_pre_screen_smiles(gen_smiles, _tid_int, "protein", top_n=len(gen_smiles))
+                            if lb_filtered is not None:
+                                filtered = lb_filtered
+                                log.debug(f"[LIFE-BRAIN] Phase 4 filter: {len(gen_smiles)} → {len(filtered)} for {tid}")
+                            else:
+                                filtered = _pnet_pre_screen(gen_smiles, tid, top_n=len(gen_smiles))
+                        except Exception:
+                            filtered = _pnet_pre_screen(gen_smiles, tid, top_n=len(gen_smiles))
+                    else:
+                        filtered    = _pnet_pre_screen(gen_smiles, tid, top_n=len(gen_smiles))
+                        log.debug(f"[PROTEINNET] Phase 4 filter: {len(gen_smiles)} → {len(filtered)} for {tid}")
                     filtered_set = set(filtered)
                     gen_cands   = [(l, s, sc) for l, s, sc in gen_cands if s in filtered_set]
-                    log.debug(f"[PROTEINNET] Phase 4 filter: {len(gen_smiles)} → {len(gen_cands)} for {tid}")
                 except Exception as _gpf:
                     log.debug(f"[PROTEINNET] Phase 4 filter failed (non-fatal): {_gpf}")
             novel = sub_memory.filter_novel(gen_cands) if gen_cands else []
@@ -1855,7 +1900,24 @@ def main():
                         cnet_report = _cnet_get_report()
                         cnet_r2     = cnet_report.get("models", {}).get(tid, {}).get("r2")
                         cnet_status = cnet_report.get("models", {}).get(tid, {}).get("status")
-                        if cnet_status == "ready" and cnet_r2 is not None and cnet_r2 >= _CNET_MIN_R2:
+                        # LIFE-BRAIN: if CRISPR branch trusted, use it instead
+                        if (
+                            _LBRAIN_AVAILABLE
+                            and _lbrain_trusted is not None
+                            and _lbrain_pre_screen_crispr is not None
+                            and _lbrain_trusted("crispr")
+                        ):
+                            _crispr_tid_int = int(str(tid).replace("_CRISPR", "")) if str(tid).replace("_CRISPR","").isdigit() else 3000
+                            lb_crispr = _lbrain_pre_screen_crispr(all_seqs, _crispr_tid_int, top_n=5)
+                            if lb_crispr is not None:
+                                top5_seqs = lb_crispr
+                                log.info(
+                                    f"[LIFE-BRAIN] CRISPR branch pre-screen: "
+                                    f"{len(all_seqs)} → top {len(top5_seqs)} for {tid}"
+                                )
+                            else:
+                                top5_seqs = _cnet_pre_screen(all_seqs, tid, top_n=5) if (cnet_status == "ready" and cnet_r2 is not None and cnet_r2 >= _CNET_MIN_R2) else [c["seq"] for c in all_candidates[:5]]
+                        elif cnet_status == "ready" and cnet_r2 is not None and cnet_r2 >= _CNET_MIN_R2:
                             top5_seqs = _cnet_pre_screen(all_seqs, tid, top_n=5)
                             log.info(
                                 f"[CRISPR-NET] Pre-screened {len(all_seqs)} → top {len(top5_seqs)} "

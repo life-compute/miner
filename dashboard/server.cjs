@@ -242,6 +242,28 @@ function buildPublicStats() {
         generated_at: report.generated_at ?? null,
       };
     })(),
+    life_brain: (() => {
+      const report = readJson(path.join(OUT, 'life_brain_report.json')) || {};
+      const branches = report.branches || {};
+      const branchList = ['protein', 'mrna', 'crispr'].map(b => {
+        const br = branches[b] || {};
+        return {
+          name:          b,
+          trusted:       br.trusted       ?? false,
+          n:             br.n             ?? 0,
+          brain_mae:     br.brain_maes    ? (br.brain_maes.reduce((a, x) => a + x, 0) / br.brain_maes.length) : null,
+          reason:        br.reason        ?? null,
+        };
+      });
+      return {
+        total_rows:       report.total_rows       ?? 0,
+        unique_miners:    report.unique_miners     ?? 0,
+        last_trained:     report.last_trained      ?? null,
+        train_elapsed_s:  report.train_elapsed_s   ?? null,
+        branches:         branchList,
+        any_trusted:      branchList.some(b => b.trusted),
+      };
+    })(),
   };
 }
 
