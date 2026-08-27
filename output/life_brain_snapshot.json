@@ -1,121 +1,187 @@
 {
   "nodes": [
     {
+      "target_id": 4,
+      "target_name": "4",
+      "modality": "protein",
+      "x": -0.5381,
+      "y": 0.0369,
+      "z": 0.5176,
+      "row_count": 1,
+      "trusted": false,
+      "last_updated": 1787843252.1892622
+    },
+    {
+      "target_id": 8,
+      "target_name": "8",
+      "modality": "protein",
+      "x": -0.0717,
+      "y": 0.9333,
+      "z": 0.2481,
+      "row_count": 4,
+      "trusted": false,
+      "last_updated": 1787843252.1892643
+    },
+    {
+      "target_id": 9,
+      "target_name": "9",
+      "modality": "protein",
+      "x": 0.6875,
+      "y": -0.1238,
+      "z": 0.3894,
+      "row_count": 2,
+      "trusted": false,
+      "last_updated": 1787843252.1892657
+    },
+    {
+      "target_id": 20,
+      "target_name": "20",
+      "modality": "protein",
+      "x": -0.1818,
+      "y": 0.8669,
+      "z": -0.0341,
+      "row_count": 2,
+      "trusted": false,
+      "last_updated": 1787843252.189267
+    },
+    {
+      "target_id": 26,
+      "target_name": "26",
+      "modality": "protein",
+      "x": 1.0,
+      "y": -0.4291,
+      "z": 0.0028,
+      "row_count": 1,
+      "trusted": false,
+      "last_updated": 1787843252.1892686
+    },
+    {
+      "target_id": 28,
+      "target_name": "28",
+      "modality": "protein",
+      "x": -0.7003,
+      "y": -0.5335,
+      "z": -0.4375,
+      "row_count": 3,
+      "trusted": false,
+      "last_updated": 1787843252.18927
+    },
+    {
       "target_id": 3000,
       "target_name": "3000",
       "modality": "crispr",
-      "x": -0.3576,
-      "y": -0.4672,
-      "z": 0.7498,
+      "x": 0.7877,
+      "y": 0.4914,
+      "z": 0.0232,
       "row_count": 3,
       "trusted": false,
-      "last_updated": 1787840247.0817442
+      "last_updated": 1787843252.189271
     },
     {
       "target_id": 3001,
       "target_name": "3001",
       "modality": "crispr",
-      "x": 0.4167,
-      "y": 0.4173,
-      "z": 0.1426,
+      "x": -0.7353,
+      "y": -0.4019,
+      "z": -0.5582,
       "row_count": 1,
       "trusted": false,
-      "last_updated": 1787840247.081746
+      "last_updated": 1787843252.1892726
     },
     {
       "target_id": 3002,
       "target_name": "3002",
       "modality": "crispr",
-      "x": -0.0344,
-      "y": 0.405,
-      "z": 0.672,
+      "x": -0.4849,
+      "y": -0.6366,
+      "z": 0.751,
       "row_count": 3,
       "trusted": false,
-      "last_updated": 1787840247.081748
+      "last_updated": 1787843252.1892736
     },
     {
       "target_id": 3003,
       "target_name": "3003",
       "modality": "crispr",
-      "x": 0.4007,
-      "y": -0.9189,
-      "z": -0.0654,
-      "row_count": 18,
+      "x": -0.11,
+      "y": 0.4106,
+      "z": -0.4091,
+      "row_count": 24,
       "trusted": false,
-      "last_updated": 1787840247.0817494
+      "last_updated": 1787843252.1892748
     },
     {
       "target_id": 3004,
       "target_name": "3004",
       "modality": "crispr",
-      "x": 0.5115,
-      "y": 0.0742,
-      "z": 0.1153,
+      "x": 0.1329,
+      "y": -0.4392,
+      "z": 0.3046,
       "row_count": 1,
       "trusted": false,
-      "last_updated": 1787840247.0817509
+      "last_updated": 1787843252.1892762
     },
     {
       "target_id": 3005,
       "target_name": "3005",
       "modality": "crispr",
-      "x": 0.2336,
-      "y": -0.1251,
-      "z": -0.3498,
+      "x": -0.1606,
+      "y": 0.0947,
+      "z": -0.064,
       "row_count": 3,
       "trusted": false,
-      "last_updated": 1787840247.0817523
+      "last_updated": 1787843252.1892774
     },
     {
       "target_id": 3006,
       "target_name": "3006",
       "modality": "crispr",
-      "x": 1.0,
-      "y": -0.1962,
-      "z": 0.4383,
-      "row_count": 18,
+      "x": 0.7021,
+      "y": 0.0966,
+      "z": 0.5924,
+      "row_count": 23,
       "trusted": false,
-      "last_updated": 1787840247.0817542
+      "last_updated": 1787843252.1892784
     },
     {
       "target_id": 3007,
       "target_name": "3007",
       "modality": "crispr",
-      "x": 0.1329,
-      "y": 0.5643,
-      "z": -0.2938,
-      "row_count": 2,
+      "x": -0.0099,
+      "y": 0.4763,
+      "z": -0.4754,
+      "row_count": 3,
       "trusted": false,
-      "last_updated": 1787840247.0817554
+      "last_updated": 1787843252.1892798
     },
     {
       "target_id": 3008,
       "target_name": "3008",
       "modality": "crispr",
-      "x": -0.1791,
-      "y": 0.3138,
-      "z": 0.5259,
+      "x": 0.7383,
+      "y": -0.9509,
+      "z": -0.8458,
       "row_count": 1,
       "trusted": false,
-      "last_updated": 1787840247.0817566
+      "last_updated": 1787843252.189281
     },
     {
       "target_id": 3009,
       "target_name": "3009",
       "modality": "crispr",
-      "x": -0.8516,
-      "y": -0.2463,
-      "z": 0.0285,
+      "x": 0.2742,
+      "y": 0.5522,
+      "z": -0.8874,
       "row_count": 3,
       "trusted": false,
-      "last_updated": 1787840247.081758
+      "last_updated": 1787843252.1892824
     }
   ],
   "edges": [],
   "meta": {
-    "total_rows_ingested": 53,
-    "unique_miner_count": 1,
-    "last_trained": 1787840247.0817714,
+    "total_rows_ingested": 78,
+    "unique_miner_count": 2,
+    "last_trained": 1787843252.1892917,
     "branch_trust": {
       "protein": false,
       "mrna": false,
