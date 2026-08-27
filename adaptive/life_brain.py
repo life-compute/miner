@@ -269,7 +269,10 @@ def _loto_cv_smiles(
         train_rows = [r for tid, rs in target_groups.items() if tid != held_tid for r in rs]
         held_rows  = target_groups[held_tid]
 
-        if len(train_rows) < MIN_ROWS_PER_BRANCH:
+        # Inside LOTO the train set is always smaller by one target's rows;
+        # require at least 30 rows (the per-target ProteinNet minimum) not the full 150.
+        _LOTO_TRAIN_MIN = 30
+        if len(train_rows) < _LOTO_TRAIN_MIN:
             continue
 
         # Build a temporary copy of the full model, train on train_rows
@@ -353,7 +356,8 @@ def _loto_cv_crispr(rows: list[dict], model_module) -> dict:
     for held_tid in eligible_targets:
         train_rows = [r for tid, rs in target_groups.items() if tid != held_tid for r in rs]
         held_rows  = target_groups[held_tid]
-        if len(train_rows) < MIN_ROWS_PER_BRANCH:
+        _LOTO_TRAIN_MIN = 30
+        if len(train_rows) < _LOTO_TRAIN_MIN:
             continue
 
         tmp_model = _build_fresh_model()
