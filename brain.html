@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LIFE-BRAIN — The Network's Living Memory · LIFE Compute</title>
+  <style>
+    :root {
+      --bg:          #060608;
+      --surface:     #0e0f14;
+      --border:      #1a1d26;
+      --green:       #00ff88;
+      --green-dim:   #00cc6a;
+      --orange:      #ff9f43;
+      --blue:        #4d9fff;
+      --purple:      #b47aff;
+      --white:       #e8eaf0;
+      --muted:       #6b7280;
+      --font-mono:   'SF Mono', 'Fira Code', 'Consolas', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--white);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ── Nav ────────────────────────────────────────────── */
+    nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1.2rem 2rem;
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 200;
+      background: rgba(6,6,8,0.92);
+      backdrop-filter: blur(12px);
+    }
+    .logo { font-family: var(--font-mono); font-weight: 700; font-size: 1.1rem; color: var(--green); letter-spacing: 0.05em; }
+    .logo span { color: var(--white); }
+    nav a { color: var(--muted); text-decoration: none; font-size: 0.875rem; margin-left: 1.5rem; transition: color 0.2s; }
+    nav a:hover { color: var(--white); }
+    nav a.active { color: var(--green); }
+
+    /* ── Hero / explainer ───────────────────────────────── */
+    .hero {
+      max-width: 860px; margin: 0 auto;
+      padding: 4rem 2rem 2.5rem;
+      text-align: center;
+    }
+    .badge {
+      display: inline-block;
+      background: rgba(180,122,255,0.12);
+      border: 1px solid rgba(180,122,255,0.35);
+      color: var(--purple);
+      font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.12em;
+      padding: 0.3rem 0.85rem; border-radius: 999px; margin-bottom: 1.6rem;
+      text-transform: uppercase;
+    }
+    .hero h1 {
+      font-size: clamp(2rem, 5.5vw, 3.6rem);
+      font-weight: 800; line-height: 1.1; letter-spacing: -0.02em;
+      margin-bottom: 0.4rem;
+    }
+    .hero h1 em { color: var(--purple); font-style: normal; }
+    .hero-sub {
+      font-family: var(--font-mono); font-size: 0.78rem;
+      color: var(--muted); letter-spacing: 0.06em;
+      margin-bottom: 2.5rem;
+    }
+    .explainer { text-align: left; }
+    .explainer p {
+      font-size: 1.0rem; color: #b0b5c0; line-height: 1.75;
+      margin-bottom: 1.25rem;
+    }
+    .explainer strong { color: var(--white); font-weight: 600; }
+
+    /* modality legend inside explainer */
+    .legend-row {
+      display: flex; gap: 1.8rem; flex-wrap: wrap;
+      margin: 1.5rem 0 0.5rem;
+    }
+    .legend-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.82rem; color: var(--muted); }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .legend-dot.protein { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .legend-dot.mrna    { background: var(--orange); box-shadow: 0 0 6px var(--orange); }
+    .legend-dot.crispr  { background: var(--blue); box-shadow: 0 0 6px var(--blue); }
+
+    /* ── Visualization container ─────────────────────────── */
+    .viz-wrap {
+      position: relative;
+      width: 100%;
+      height: min(80vh, 720px);
+      background: radial-gradient(ellipse 90% 70% at 50% 40%, rgba(20,14,40,0.9) 0%, var(--bg) 100%);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      margin: 2rem 0;
+      overflow: hidden;
+    }
+    #brain-canvas {
+      display: block;
+      width: 100%; height: 100%;
+    }
+
+    /* ── Status overlay (top-left) ───────────────────────── */
+    #overlay {
+      position: absolute; top: 1.25rem; left: 1.5rem;
+      display: flex; flex-direction: column; gap: 0.55rem;
+      pointer-events: none; z-index: 10;
+    }
+    .ov-row {
+      display: flex; align-items: baseline; gap: 0.5rem;
+      background: rgba(6,6,8,0.72);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px;
+      padding: 0.45rem 0.85rem;
+      backdrop-filter: blur(8px);
+    }
+    .ov-val {
+      font-family: var(--font-mono); font-size: 1.1rem; font-weight: 700;
+      color: var(--white);
+    }
+    .ov-label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+
+    /* ── Branch status pills (top-right) ─────────────────── */
+    #branches {
+      position: absolute; top: 1.25rem; right: 1.5rem;
+      display: flex; flex-direction: column; gap: 0.45rem;
+      pointer-events: none; z-index: 10;
+    }
+    .branch-pill {
+      display: flex; align-items: center; gap: 0.5rem;
+      background: rgba(6,6,8,0.72);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 999px;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.72rem; font-family: var(--font-mono);
+      letter-spacing: 0.06em;
+      backdrop-filter: blur(8px);
+    }
+    .branch-pill .dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    }
+    .branch-pill .dot.protein { background: var(--green); }
+    .branch-pill .dot.mrna    { background: var(--orange); }
+    .branch-pill .dot.crispr  { background: var(--blue); }
+    .branch-pill .bstatus {
+      text-transform: uppercase; letter-spacing: 0.1em;
+    }
+    .bstatus.trusted     { color: var(--green); }
+    .bstatus.evaluating  { color: var(--orange); }
+    .bstatus.accumulating{ color: var(--muted); }
+
+    /* ── Cold-start / loading / error banner ─────────────── */
+    #status-banner {
+      position: absolute;
+      bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+      background: rgba(6,6,8,0.85);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 0.7rem 1.4rem;
+      font-size: 0.82rem; color: var(--muted);
+      text-align: center; pointer-events: none; z-index: 10;
+      backdrop-filter: blur(10px);
+      white-space: nowrap;
+      max-width: calc(100% - 3rem);
+      white-space: normal;
+    }
+    #status-banner.hidden { display: none; }
+    #status-banner.error  { border-color: rgba(255,77,109,0.35); color: #ff4d6d; }
+
+    /* ── Last updated ticker (bottom-right) ──────────────── */
+    #ticker {
+      position: absolute; bottom: 1.25rem; right: 1.5rem;
+      font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted);
+      pointer-events: none; z-index: 10;
+    }
+
+    /* ── Tooltip ─────────────────────────────────────────── */
+    #tooltip {
+      position: absolute; display: none;
+      background: rgba(14,15,20,0.95);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.55rem 0.9rem;
+      font-size: 0.78rem; pointer-events: none; z-index: 50;
+      line-height: 1.5; min-width: 160px;
+    }
+    #tooltip strong { color: var(--white); display: block; margin-bottom: 0.25rem; }
+    #tooltip span { color: var(--muted); }
+
+    /* ── Stats bar (below canvas) ────────────────────────── */
+    .stats-bar {
+      display: flex; gap: 0; justify-content: center; flex-wrap: wrap;
+      border: 1px solid var(--border); border-radius: 12px;
+      background: var(--surface); overflow: hidden;
+      max-width: 760px; margin: 0 auto 3rem; width: calc(100% - 4rem);
+    }
+    .stat { flex: 1; min-width: 150px; padding: 1.2rem 1.5rem; border-right: 1px solid var(--border); text-align: center; }
+    .stat:last-child { border-right: none; }
+    .stat-value { font-family: var(--font-mono); font-size: 1.5rem; font-weight: 700; color: var(--purple); display: block; }
+    .stat-label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 0.2rem; }
+    .stat-live { display: inline-block; width: 6px; height: 6px; background: var(--green); border-radius: 50%; margin-right: 0.3rem; animation: pulse-dot 2s infinite; vertical-align: middle; }
+    @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+    /* ── Footer ──────────────────────────────────────────── */
+    footer { border-top: 1px solid var(--border); text-align: center; padding: 2rem; color: var(--muted); font-size: 0.8rem; }
+    footer a { color: var(--muted); text-decoration: none; }
+    footer a:hover { color: var(--green); }
+
+    @media (max-width: 600px) {
+      .stats-bar { flex-direction: column; }
+      .stat { border-right: none; border-bottom: 1px solid var(--border); }
+      .stat:last-child { border-bottom: none; }
+      #branches { top: auto; bottom: 3.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="logo"><a href="index.html" style="text-decoration:none;color:inherit">LIFE<span>.compute</span></a></div>
+  <div>
+    <a href="index.html#install">Install</a>
+    <a href="index.html#how">How it works</a>
+    <a href="brain.html" class="active">LIFE-BRAIN</a>
+    <a href="https://github.com/life-compute/miner" target="_blank">GitHub</a>
+    <a href="https://explorer.solana.com/address/3dYbT2egotmpGBoLZe2pytsraffxre7V5dySsTKgxYiC?cluster=devnet" target="_blank">Explorer</a>
+  </div>
+</nav>
+
+<!-- ── Hero / Explainer ─────────────────────────────────────────────── -->
+<div class="hero">
+  <div class="badge">&#x2726; Neural Network · Live</div>
+  <h1>LIFE-BRAIN —<br>The Network's <em>Living Memory</em></h1>
+  <p class="hero-sub">Updated after every retrain cycle · Honest at every frame</p>
+
+  <div class="explainer">
+    <p>
+      Every time a miner's submission passes validator consensus and lands on-chain,
+      LIFE-BRAIN ingests it. The model learns <strong>jointly</strong> across all three
+      drug-discovery modalities — small-molecule protein binding, mRNA silencing, and
+      CRISPR guide-RNA efficiency — accumulating a shared embedding space where
+      biochemically similar targets cluster together regardless of which miner submitted the data.
+    </p>
+    <p>
+      A branch earns <strong>"trusted" status</strong> only after passing
+      leave-one-target-out cross-validation against real held-out discoveries —
+      meaning LIFE-BRAIN's predictions for a target it's never been trained on
+      must outperform the per-modality fallback baseline. Until that bar is cleared,
+      the branch influences nothing: it observes, accumulates, and waits. Every node
+      you see below represents a real cancer target with at least one
+      validator-confirmed discovery ingested by the network. Every edge represents
+      a real learned similarity between two trusted branches' embeddings, computed
+      from a 16-dimensional internal representation projected into 3D by SVD.
+      Nothing here is decorative.
+    </p>
+    <p>
+      The network grows automatically. As new miners join and new targets accumulate
+      confirmed submissions, LIFE-BRAIN retrains, the snapshot updates, and this page
+      reflects the new structure within 30 seconds — no manual intervention required.
+    </p>
+    <div class="legend-row">
+      <div class="legend-item"><div class="legend-dot protein"></div> Protein binding (small molecule)</div>
+      <div class="legend-item"><div class="legend-dot mrna"></div> mRNA silencing</div>
+      <div class="legend-item"><div class="legend-dot crispr"></div> CRISPR guide-RNA</div>
+      <div class="legend-item" style="margin-left:auto; color:#555; font-size:0.75rem">
+        Bright = trusted branch &nbsp;·&nbsp; Dim/pulsing = still evaluating
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Three.js scene ──────────────────────────────────────────────── -->
+<div class="viz-wrap">
+  <canvas id="brain-canvas"></canvas>
+
+  <!-- Live overlay (top-left) -->
+  <div id="overlay">
+    <div class="ov-row">
+      <span class="ov-val" id="ov-rows">—</span>
+      <span class="ov-label">discoveries ingested</span>
+    </div>
+    <div class="ov-row">
+      <span class="ov-val" id="ov-miners">—</span>
+      <span class="ov-label">contributing miners</span>
+    </div>
+    <div class="ov-row">
+      <span class="ov-val" id="ov-nodes">—</span>
+      <span class="ov-label">active targets</span>
+    </div>
+    <div class="ov-row">
+      <span class="ov-val" id="ov-edges">—</span>
+      <span class="ov-label">learned synapses</span>
+    </div>
+  </div>
+
+  <!-- Branch trust pills (top-right) -->
+  <div id="branches">
+    <div class="branch-pill">
+      <div class="dot protein"></div>
+      <span style="color:var(--muted);margin-right:0.3rem">PROTEIN</span>
+      <span class="bstatus accumulating" id="bp-protein">ACCUMULATING</span>
+    </div>
+    <div class="branch-pill">
+      <div class="dot mrna"></div>
+      <span style="color:var(--muted);margin-right:0.3rem">mRNA</span>
+      <span class="bstatus accumulating" id="bp-mrna">ACCUMULATING</span>
+    </div>
+    <div class="branch-pill">
+      <div class="dot crispr"></div>
+      <span style="color:var(--muted);margin-right:0.3rem">CRISPR</span>
+      <span class="bstatus accumulating" id="bp-crispr">ACCUMULATING</span>
+    </div>
+  </div>
+
+  <!-- Status banner (bottom-centre) -->
+  <div id="status-banner"></div>
+
+  <!-- Ticker (bottom-right) -->
+  <div id="ticker" id="ticker">Fetching snapshot…</div>
+
+  <!-- Tooltip -->
+  <div id="tooltip"></div>
+</div>
+
+<!-- ── Stats bar ──────────────────────────────────────────────────── -->
+<div class="stats-bar">
+  <div class="stat">
+    <span class="stat-value" id="sb-rows">—</span>
+    <span class="stat-label"><span class="stat-live"></span>Discoveries Ingested</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value" id="sb-miners">—</span>
+    <span class="stat-label">Contributing Miners</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value" id="sb-targets">—</span>
+    <span class="stat-label">Active Targets</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value" id="sb-synapses">—</span>
+    <span class="stat-label">Learned Synapses</span>
+  </div>
+</div>
+
+<footer>
+  <p>
+    LIFE Compute is open source —
+    <a href="https://github.com/life-compute/miner">miner</a> ·
+    <a href="https://github.com/life-compute/targets">targets</a> ·
+    <a href="https://github.com/life-compute/core">core</a>
+    &nbsp;·&nbsp; Snapshot: <code style="font-size:0.75rem">output/life_brain_snapshot.json</code>
+    &nbsp;·&nbsp; MIT License
+  </p>
+</footer>
+
+<!-- Three.js r128 + OrbitControls (CDN) -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIFE-BRAIN Visualiser — brain.html
+   Three.js r128, vanilla JS, zero additional dependencies.
+
+   Techniques:
+   ─ Node spheres + Sprite glow halos (radial-gradient canvas texture,
+     AdditiveBlending) for bloom-like glow without EffectComposer.
+   ─ Pulsing via material.opacity update each RAF frame (dim/trusted split).
+   ─ LineSegments with AdditiveBlending for synapse edges.
+   ─ Points starfield (4000 verts) with slow sinusoidal per-frame drift.
+   ─ OrbitControls with auto-orbit that pauses on pointer interaction.
+   ─ New-arrival pulse: compare successive snapshots, flash affected nodes.
+
+   Honesty guards:
+   ─ Every mesh created from snapshot data only.
+   ─ Edges drawn only where snapshot.edges lists them.
+   ─ If snapshot fails: clear error message, not a fake scene.
+═══════════════════════════════════════════════════════════════════════════ */
+
+// ── Config ───────────────────────────────────────────────────────────────────
+const SNAPSHOT_URL    = 'https://raw.githubusercontent.com/life-compute/miner/main/output/life_brain_snapshot.json';
+const POLL_INTERVAL   = 30_000;  // ms between snapshot re-fetches
+const SCALE           = 4.5;     // scene units per normalised coordinate [-1,1]
+const SCENE_SPREAD    = 1.2;     // slight extra spread to avoid crowding centre
+const ORBIT_SPEED     = 0.10;    // degrees/frame auto-orbit
+const ORBIT_IDLE_MS   = 2_500;   // pause auto-orbit after pointer activity
+const PULSE_SPEED     = 1.8;     // radians/second for dim-node oscillation
+const ARRIVAL_PULSE_MS= 1_800;   // ms a newly-arrived node stays brightened
+
+// Modality colours
+const MOD_COLOR = {
+  protein: new THREE.Color('#00ff88'),
+  mrna:    new THREE.Color('#ff9f43'),
+  crispr:  new THREE.Color('#4d9fff'),
+};
+const MOD_COLOR_DIM = {
+  protein: new THREE.Color('#005533'),
+  mrna:    new THREE.Color('#6b3d10'),
+  crispr:  new THREE.Color('#0d3060'),
+};
+
+// ── Scene bootstrap ───────────────────────────────────────────────────────────
+const canvas   = document.getElementById('brain-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x000000, 0);
+renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, canvas.clientWidth / canvas.clientHeight, 0.01, 200);
+camera.position.set(0, 0, 14);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping    = true;
+controls.dampingFactor    = 0.06;
+controls.autoRotate       = true;
+controls.autoRotateSpeed  = ORBIT_SPEED;
+controls.minDistance      = 4;
+controls.maxDistance      = 40;
+
+let orbitPauseUntil = 0;
+['pointerdown','wheel'].forEach(ev =>
+  renderer.domElement.addEventListener(ev, () => {
+    controls.autoRotate = false;
+    orbitPauseUntil = performance.now() + ORBIT_IDLE_MS;
+  }, { passive: true })
+);
+
+// ── Resize ────────────────────────────────────────────────────────────────────
+function onResize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+const ro = new ResizeObserver(onResize);
+ro.observe(canvas.parentElement);
+
+// ── Glow sprite texture (canvas radial gradient) ──────────────────────────────
+function makeGlowTexture(color) {
+  const size = 128;
+  const c    = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createRadialGradient(size/2,size/2,0, size/2,size/2,size/2);
+  grad.addColorStop(0,   color + 'cc');
+  grad.addColorStop(0.35,color + '55');
+  grad.addColorStop(1,   color + '00');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,size,size);
+  const tex = new THREE.CanvasTexture(c);
+  return tex;
+}
+
+const glowTextures = {
+  protein: makeGlowTexture('#00ff88'),
+  mrna:    makeGlowTexture('#ff9f43'),
+  crispr:  makeGlowTexture('#4d9fff'),
+};
+
+// ── Starfield (pure depth atmosphere) ────────────────────────────────────────
+(function buildStarfield() {
+  const N    = 4000;
+  const pos  = new Float32Array(N * 3);
+  const base = new Float32Array(N * 3); // store base positions for drift
+  for (let i = 0; i < N; i++) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi   = Math.acos(2 * Math.random() - 1);
+    const r     = 18 + Math.random() * 30;
+    const x = r * Math.sin(phi) * Math.cos(theta);
+    const y = r * Math.sin(phi) * Math.sin(theta);
+    const z = r * Math.cos(phi);
+    pos[i*3]=x; pos[i*3+1]=y; pos[i*3+2]=z;
+    base[i*3]=x; base[i*3+1]=y; base[i*3+2]=z;
+  }
+  const geo  = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat  = new THREE.PointsMaterial({
+    size: 0.055, color: 0xaabbdd, transparent: true, opacity: 0.38,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const pts = new THREE.Points(geo, mat);
+  pts.userData.isStarfield = true;
+  pts.userData.base = base;
+  scene.add(pts);
+})();
+
+// ── Scene mesh holders (rebuilt each snapshot) ────────────────────────────────
+let nodeMeshes = [];   // {mesh, glow, node, pulsePhase, pulseUntil}
+let edgeLines  = null;
+let nodeGroup  = new THREE.Group();
+scene.add(nodeGroup);
+
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+const tooltip   = document.getElementById('tooltip');
+const raycaster = new THREE.Raycaster();
+const mouse     = new THREE.Vector2(-9,-9);
+let  hoverMesh  = null;
+
+renderer.domElement.addEventListener('pointermove', ev => {
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x =  ((ev.clientX - rect.left)  / rect.width)  * 2 - 1;
+  mouse.y = -((ev.clientY - rect.top)   / rect.height) * 2 + 1;
+  tooltip.style.left = (ev.clientX - rect.left + 14) + 'px';
+  tooltip.style.top  = (ev.clientY - rect.top  - 10) + 'px';
+});
+renderer.domElement.addEventListener('pointerleave', () => {
+  mouse.set(-9,-9);
+  tooltip.style.display = 'none';
+  hoverMesh = null;
+});
+
+// ── Build scene from snapshot ─────────────────────────────────────────────────
+let prevRowCounts = {};   // target_id → row_count from last snapshot, for arrival detection
+
+function buildScene(snap) {
+  // Tear down old meshes
+  nodeGroup.clear();
+  nodeMeshes = [];
+  if (edgeLines) { scene.remove(edgeLines); edgeLines = null; }
+
+  const { nodes, edges } = snap;
+
+  // ── Nodes ──
+  nodes.forEach((node, idx) => {
+    const mod  = (node.modality || 'protein').toLowerCase();
+    const pos  = new THREE.Vector3(
+      node.x * SCALE * SCENE_SPREAD,
+      node.y * SCALE * SCENE_SPREAD,
+      node.z * SCALE * SCENE_SPREAD
+    );
+
+    const trusted = !!node.trusted;
+    const radius  = trusted ? 0.14 : 0.085;
+    const geo  = new THREE.SphereGeometry(radius, 20, 14);
+    const col  = trusted ? MOD_COLOR[mod] : MOD_COLOR_DIM[mod];
+    const mat  = new THREE.MeshBasicMaterial({
+      color: col,
+      transparent: true,
+      opacity: trusted ? 0.92 : 0.35,
+      blending: trusted ? THREE.NormalBlending : THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(pos);
+    mesh.userData.node = node;
+    nodeGroup.add(mesh);
+
+    // Glow sprite
+    const glowSize   = trusted ? 1.1 : 0.52;
+    const glowMat    = new THREE.SpriteMaterial({
+      map: glowTextures[mod],
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+      opacity: trusted ? 0.75 : 0.28,
+    });
+    const glow = new THREE.Sprite(glowMat);
+    glow.scale.setScalar(glowSize);
+    glow.position.copy(pos);
+    nodeGroup.add(glow);
+
+    const entry = {
+      mesh, glow, node,
+      trusted,
+      pulsePhase: (idx / nodes.length) * Math.PI * 2,  // stagger phases
+      pulseUntil: 0,
+    };
+
+    // Detect new arrivals vs previous poll
+    const prevCount = prevRowCounts[node.target_id];
+    if (prevCount !== undefined && node.row_count > prevCount) {
+      entry.pulseUntil = performance.now() + ARRIVAL_PULSE_MS;
+    }
+
+    nodeMeshes.push(entry);
+  });
+
+  // Record current counts for next diff
+  prevRowCounts = {};
+  nodes.forEach(n => { prevRowCounts[n.target_id] = n.row_count; });
+
+  // ── Edges (synapses) — ONLY where snapshot.edges lists them ──
+  if (edges && edges.length > 0) {
+    // Build position lookup from target_id → Vector3
+    const posMap = {};
+    nodes.forEach(n => {
+      posMap[n.target_id] = new THREE.Vector3(
+        n.x * SCALE * SCENE_SPREAD,
+        n.y * SCALE * SCENE_SPREAD,
+        n.z * SCALE * SCENE_SPREAD
+      );
+    });
+
+    const verts = [];
+    edges.forEach(e => {
+      const pa = posMap[e.target_a];
+      const pb = posMap[e.target_b];
+      if (pa && pb) {
+        verts.push(pa.x, pa.y, pa.z, pb.x, pb.y, pb.z);
+      }
+    });
+
+    if (verts.length > 0) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+      const mat = new THREE.LineBasicMaterial({
+        color: 0xaaaaff,
+        transparent: true, opacity: 0.22,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      });
+      edgeLines = new THREE.LineSegments(geo, mat);
+      scene.add(edgeLines);
+    }
+  }
+}
+
+// ── Update UI elements from snapshot.meta ────────────────────────────────────
+function updateUI(snap) {
+  const meta   = snap.meta  || {};
+  const nodes  = snap.nodes || [];
+  const edges  = snap.edges || [];
+  const branch = meta.branch_trust || {};
+
+  const rows    = meta.total_rows_ingested || 0;
+  const miners  = meta.unique_miner_count  || 0;
+  const ncount  = nodes.length;
+  const ecount  = edges.length;
+
+  // Overlay
+  setText('ov-rows',   rows.toLocaleString());
+  setText('ov-miners', miners.toLocaleString());
+  setText('ov-nodes',  ncount.toLocaleString());
+  setText('ov-edges',  ecount.toLocaleString());
+
+  // Stats bar
+  setText('sb-rows',     rows.toLocaleString());
+  setText('sb-miners',   miners.toLocaleString());
+  setText('sb-targets',  ncount.toLocaleString());
+  setText('sb-synapses', ecount.toLocaleString());
+
+  // Branch pills
+  updateBranch('bp-protein', branch.protein);
+  updateBranch('bp-mrna',    branch.mrna);
+  updateBranch('bp-crispr',  branch.crispr);
+
+  // Status banner
+  const anyTrusted = Object.values(branch).some(Boolean);
+  const banner = document.getElementById('status-banner');
+  if (ncount === 0) {
+    banner.textContent = 'Waiting for first confirmed discovery to appear…';
+    banner.className = '';
+  } else if (!anyTrusted) {
+    banner.textContent =
+      `LIFE-BRAIN is learning — ${rows.toLocaleString()} confirmed discoveries ingested across ${ncount} targets, still building trust`;
+    banner.className = '';
+  } else {
+    banner.className = 'hidden';
+  }
+
+  // Ticker
+  if (meta.last_trained) {
+    const d   = new Date(meta.last_trained * 1000);
+    const ago = timeSince(d);
+    document.getElementById('ticker').textContent = `Last retrain: ${ago}`;
+  } else {
+    document.getElementById('ticker').textContent = 'Not yet trained';
+  }
+}
+
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+function updateBranch(id, trusted) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'bstatus ' + (trusted ? 'trusted' : 'evaluating');
+  el.textContent = trusted ? 'TRUSTED' : 'EVALUATING';
+}
+
+function timeSince(date) {
+  const s = Math.floor((Date.now() - date) / 1000);
+  if (s < 90)     return `${s}s ago`;
+  if (s < 3600)   return `${Math.floor(s/60)}m ago`;
+  if (s < 86400)  return `${Math.floor(s/3600)}h ago`;
+  return `${Math.floor(s/86400)}d ago`;
+}
+
+// ── Snapshot fetch + poll ─────────────────────────────────────────────────────
+let lastSnapshot = null;
+let fetchFailed  = false;
+
+async function fetchSnapshot() {
+  const banner = document.getElementById('status-banner');
+  try {
+    // Cache-bust so we always get the latest version from GitHub raw
+    const res = await fetch(SNAPSHOT_URL + '?t=' + Date.now());
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const snap = await res.json();
+
+    // Validate structure — honesty guard
+    if (!Array.isArray(snap.nodes) || !Array.isArray(snap.edges)) {
+      throw new Error('Snapshot missing nodes/edges arrays');
+    }
+
+    fetchFailed = false;
+    lastSnapshot = snap;
+
+    buildScene(snap);
+    updateUI(snap);
+  } catch (err) {
+    console.warn('[LIFE-BRAIN] Snapshot fetch failed:', err.message);
+    fetchFailed = true;
+    if (!lastSnapshot) {
+      // Nothing to show at all
+      banner.textContent = `Unable to load LIFE-BRAIN snapshot: ${err.message}. Retrying in 30s.`;
+      banner.className   = 'error';
+    } else {
+      // Keep existing scene, note that data may be stale
+      document.getElementById('ticker').textContent = 'Snapshot unreachable — showing last data';
+    }
+  }
+}
+
+// Initial load
+fetchSnapshot();
+// Poll every 30s
+setInterval(fetchSnapshot, POLL_INTERVAL);
+
+// ── Animation loop ────────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t    = clock.getElapsedTime();
+  const now  = performance.now();
+
+  // Resume auto-rotate after idle
+  if (!controls.autoRotate && now > orbitPauseUntil) {
+    controls.autoRotate = true;
+  }
+  controls.update();
+
+  // ── Animate dim nodes (pulsing opacity + glow) ──
+  nodeMeshes.forEach(entry => {
+    if (entry.trusted) {
+      // Trusted: subtle steady breathe
+      const breathe = 0.88 + 0.07 * Math.sin(t * 0.9 + entry.pulsePhase);
+      entry.mesh.material.opacity = breathe;
+
+      // Arrival flash: temporarily brighten
+      if (entry.pulseUntil > now) {
+        const progress = (entry.pulseUntil - now) / ARRIVAL_PULSE_MS;
+        entry.glow.material.opacity = 0.75 + 0.55 * progress;
+        entry.mesh.material.opacity = 0.92 + 0.25 * progress;
+      } else {
+        entry.glow.material.opacity = 0.70 + 0.10 * Math.sin(t * 0.7 + entry.pulsePhase);
+      }
+    } else {
+      // Accumulating: slower, dimmer pulse
+      const p = 0.22 + 0.18 * (0.5 + 0.5 * Math.sin(t * PULSE_SPEED + entry.pulsePhase));
+      entry.mesh.material.opacity = p;
+      entry.glow.material.opacity = p * 0.6;
+    }
+  });
+
+  // ── Subtle starfield drift ──
+  scene.children.forEach(obj => {
+    if (!obj.userData.isStarfield) return;
+    const pos  = obj.geometry.attributes.position;
+    const base = obj.userData.base;
+    for (let i = 0, n = pos.count; i < n; i++) {
+      const phase = i * 0.91;
+      pos.array[i*3]   = base[i*3]   + 0.08 * Math.sin(t * 0.17 + phase);
+      pos.array[i*3+1] = base[i*3+1] + 0.08 * Math.cos(t * 0.13 + phase * 1.3);
+      pos.array[i*3+2] = base[i*3+2] + 0.06 * Math.sin(t * 0.21 + phase * 0.7);
+    }
+    pos.needsUpdate = true;
+  });
+
+  // ── Tooltip / hover ──
+  raycaster.setFromCamera(mouse, camera);
+  const sphereMeshes = nodeMeshes.map(e => e.mesh);
+  const hits = raycaster.intersectObjects(sphereMeshes);
+  if (hits.length > 0) {
+    const hit  = hits[0].object;
+    const node = hit.userData.node;
+    if (hit !== hoverMesh) {
+      hoverMesh = hit;
+      const mod  = (node.modality || 'protein');
+      const modLabel = mod === 'mrna' ? 'mRNA' : mod.charAt(0).toUpperCase() + mod.slice(1);
+      tooltip.innerHTML =
+        `<strong>${node.target_name || node.target_id}</strong>` +
+        `<span>${modLabel} · ${node.row_count} discoveries</span><br>` +
+        `<span style="color:${node.trusted ? 'var(--green)' : 'var(--muted)'}">` +
+        `${node.trusted ? '⬤ Trusted' : '◌ Evaluating'}</span>`;
+      tooltip.style.display = 'block';
+    }
+  } else {
+    tooltip.style.display = 'none';
+    hoverMesh = null;
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
