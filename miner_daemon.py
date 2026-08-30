@@ -149,6 +149,7 @@ REF_COMPOUNDS_URL = _env("REF_COMPOUNDS_URL", "https://raw.githubusercontent.com
 POLL_SECONDS  = int(_env("POLL_SECONDS", "60"))
 TARGET_REFRESH       = 300      # seconds between target list refreshes
 REF_RESCREEN_INTERVAL = 4 * 3600.0  # screen each ref compound at most once per 4 h
+MRNA_SCHEDULE_WEIGHT  = 2           # mRNA picks per protein pick (2 → P M M, 3 → P M M M)
 
 # ── Multi-GPU configuration ───────────────────────────────────────────────────
 def _detect_gpu_count() -> int:
@@ -194,15 +195,37 @@ BOLTZ_SEED = 68   # included in on-chain submission so validators reproduce the 
 # Minimum combined gRNA score required before submitting on-chain.
 # combined = on_target × off_target × delivery  (range 0–1.1).
 #
-# Threshold rationale (2026-08-25):
-#   delivery=0.4  (gc < 0.30 or gc > 0.80)  → max combined = 1.1 × 1.0 × 0.4 = 0.44
-#   delivery=0.7  (gc 30–80%, no stem-loop)  → max combined = 1.1 × 1.0 × 0.7 = 0.77
+# Option B (2026-08-27): replace analytical combined with iptm × delivery.
 #
-# 0.45 sits just above the delivery=0.4 ceiling, so high-GC hotspots like MYC
-# (gc≈0.85 → delivery=0.4 → combined≈0.4 even with perfect on/off-target) are
-# correctly rejected.  delivery≥0.7 sequences are unaffected.
-# Sequences below this are logged and skipped — not submitted.
+# Rationale: combined = on_target × off_target × delivery was calibrated when
+# the combined score also determined the analytical affinity estimate.  Since
+# Boltz2 GPU inference now sets affinity independently, combined and Boltz2
+# affinity are orthogonal (measured r = −0.026 across 1,120 Boltz2 HITs).
+# on_target is frozen at ~0.525 for all novel gRNAs (not near known hotspots),
+# making combined effectively a one-dimensional delivery gate with extra noise.
+#
+# New formula: quality_score = iptm × delivery
+#   iptm (0–1): Boltz2 interface predicted TM-score — structural binding quality
+#   delivery (0.4 / 0.7 / 1.0): GC content suitability — same as before
+#   Falls back to combined (analytical) when model="analytical" (iptm unavailable).
+#
+# Default threshold 0.45 applies to all targets unless overridden below.
+# Per-target overrides are calibrated from historical data (life_boltz_scores ×
+# life_crispr_scores join, n≈940–960 matched hits per target, 2026-08-28):
+#
+#   CDK4 → 0.300: CDK4 gRNAs cluster at GC-content boundary → delivery=0.40 (floor)
+#     → quality_score = iptm×0.40 ≈ 0.33 for strong hits. 153/906 confirmed hits
+#     (16.9%) were blocked at 0.45. miss_max=0.400; delivery gate (0.6) already
+#     screens out-of-range-GC sequences independently.
+#
+#   MYC  → 0.320: MYC has only 7 rejects in history (miss_max=0.273). 20/915
+#     confirmed hits were blocked at 0.45. Clean gap of 0.30+ above miss ceiling.
 CRISPR_MIN_COMBINED: float = 0.45
+CRISPR_MIN_COMBINED_BY_TARGET: dict[str, float] = {
+    # Per-target overrides — targets not listed use CRISPR_MIN_COMBINED (0.45).
+    "MYC_CRISPR":  0.320,  # 20/915 hits recovered; miss_max=0.273, gap=+0.047
+    "CDK4_CRISPR": 0.300,  # 153/906 hits recovered; delivery-floor mechanism
+}
 
 # Minimum delivery score (Score 3) required before submitting on-chain.
 # delivery = 0.4 for gc < 0.30 or gc > 0.80 (out-of-range GC).
@@ -211,6 +234,13 @@ CRISPR_MIN_COMBINED: float = 0.45
 # 0.6 sits between 0.5 and 0.7, blocking all out-of-range-GC sequences
 # (with or without stem-loop bonus) while allowing normal-GC sequences through.
 CRISPR_MIN_DELIVERY: float = 0.6
+
+# GPU mutex — serialises Boltz2 inference between the main scoring loop and the
+# CRISPR background thread.  Both sides acquire before any GPU call and release
+# immediately after.  CRISPR analytical candidate generation (CPU, ~0.1 s) is
+# unaffected.  Prevents concurrent 6.8 GB (CRISPR) + 1.6–14 GB (protein/mRNA)
+# allocations that silently OOM the RTX 5060's 8 GB VRAM.
+_GPU_LOCK = threading.Lock()
 
 # Maximum on-chain CRISPR submissions per epoch across all targets combined.
 # Prevents spamming the chain when all 10 targets repeatedly return the same hotspots.
@@ -1752,6 +1782,26 @@ def main():
 
     # ── LIFE PULSE background sweep ────────────────────────────────────────────
     if _PULSE_AVAILABLE:
+        # Pre-warm scipy/OpenBLAS CPU dispatcher on the main thread before any
+        # background threads start.  Without this, the first sklearn GBR.fit()
+        # (fired by the CRISPR-Net retrain loop ~70 min into a run when a model
+        # becomes stale) initialises the OpenBLAS dynamic-CPU-dispatch "tracer"
+        # concurrently with a PULSE sweep batch, which races against the already-
+        # initialised torch dispatcher and raises RuntimeError("CPU dispatcher
+        # tracer already initlized").  That exception is caught by _pulse_loop's
+        # except block but poisons every subsequent call, stalling PULSE silently
+        # (last_sweep_ts stops updating → dashboard shows IDLE) until next restart.
+        # Calling a trivial sklearn op here forces the one-time C-level init to
+        # complete cleanly in the main thread, making all later calls no-ops.
+        try:
+            import numpy as _np
+            from sklearn.dummy import DummyRegressor as _DR
+            _dr = _DR(); _dr.fit(_np.zeros((2, 1)), _np.zeros(2))
+            del _dr, _DR, _np
+            log.debug("[PULSE] scipy/sklearn CPU dispatcher pre-warmed")
+        except Exception as _pw_err:
+            log.debug(f"[PULSE] pre-warm skipped (non-fatal): {_pw_err}")
+
         def _pulse_loop():
             """Run continuous Sobol sweep in a background daemon thread.
 
@@ -1951,7 +2001,8 @@ def main():
                             log.info(
                                 f"[CRISPR] {tid} | Running Boltz2 GPU on gRNA={_candidate_seq[:12]}…"
                             )
-                            _bres = run_boltz2_crispr_scoring(_candidate_seq)
+                            with _GPU_LOCK:
+                                _bres = run_boltz2_crispr_scoring(_candidate_seq)
                             _bkcal = _bres.get("affinity_kcal")
                             if _bkcal is not None:
                                 if best_boltz_model == "analytical" or _bkcal < best_affinity:
@@ -2016,6 +2067,10 @@ def main():
                                 "iptm":               boltz_result.get("iptm"),
                                 "confidence_score":   boltz_result.get("confidence_score"),
                                 "analytical_affinity": analytical_affinity,
+                                "on_target":          grna_scores.get("on_target"),
+                                "off_target":         grna_scores.get("off_target"),
+                                "delivery":           grna_scores.get("delivery"),
+                                "combined":           grna_scores.get("combined"),
                                 "model":              boltz_model,
                                 "hit":                         hit,
                                 "source":                      source,
@@ -2027,17 +2082,25 @@ def main():
 
                     # On-chain submission — gates on quality threshold + dedup + epoch cap
                     tx_sig_crispr: str | None = None
-                    combined_score  = grna_scores.get("combined",  0.0)
                     delivery_score  = grna_scores.get("delivery",  0.0)
+                    # Option B: quality_score = iptm × delivery for Boltz2 runs;
+                    # falls back to analytical combined when model=analytical (no iptm).
+                    _iptm = boltz_result.get("iptm") if boltz_model == "boltz2-gpu-crispr" else None
+                    if _iptm is not None:
+                        quality_score = _iptm * delivery_score
+                    else:
+                        quality_score = grna_scores.get("combined", 0.0)
                     if hit and delivery_score < CRISPR_MIN_DELIVERY:
                         log.info(
                             f"[CRISPR] {tid} | delivery={delivery_score:.3f} < "
                             f"{CRISPR_MIN_DELIVERY} (out-of-range GC) — skipping submission"
                         )
-                    elif hit and combined_score < CRISPR_MIN_COMBINED:
+                    elif hit and quality_score < CRISPR_MIN_COMBINED_BY_TARGET.get(tid, CRISPR_MIN_COMBINED):
+                        _min_q = CRISPR_MIN_COMBINED_BY_TARGET.get(tid, CRISPR_MIN_COMBINED)
                         log.info(
-                            f"[CRISPR] {tid} | combined={combined_score:.3f} < "
-                            f"{CRISPR_MIN_COMBINED} threshold — skipping submission"
+                            f"[CRISPR] {tid} | quality={quality_score:.3f} "
+                            f"({'iptm×delivery' if _iptm is not None else 'combined'}) < "
+                            f"{_min_q} threshold — skipping submission"
                         )
                     elif hit and _dedup.is_recently_submitted(tid, grna_seq, current_epoch):
                         log.info(
@@ -2161,11 +2224,16 @@ def main():
         **_CRISPR_TARGET_ID_MAP,
     }
 
-    # Round-robin index — rotates through all fetched targets regardless of
-    # on-chain registration.  Submission is still gated by TARGET_ID_MAP below.
-    # To switch to random: replace the two lines below with
-    #   target = random.choice(targets or [{}])
-    target_idx = 0
+    # Weighted protein/mRNA scheduling — picks mRNA MRNA_SCHEDULE_WEIGHT times per
+    # protein pick so mRNA targets (~30) get proportionally more per-target GPU time
+    # than protein targets (~2,000).  Pattern (weight=2): P M M  P M M …
+    # CRISPR runs independently in _crispr_loop (unchanged).
+    # Submission is still gated by TARGET_ID_MAP below.
+    protein_targets: list = []
+    mrna_targets:    list = []
+    protein_idx  = 0
+    mrna_idx     = 0
+    _mrna_budget = 0   # counts down remaining mRNA picks before next protein pick
 
     while True:
         now = time.time()
@@ -2186,9 +2254,17 @@ def main():
                 uid  = t["uniprot_id"]
                 flag = "✓ MSA" if _msa_path_for(uid) != "empty" else "✗ no MSA (single-seq)"
                 log.info(f"  {t['id']:8s} {uid}  {flag}")
-            # Inject CRISPR targets into the round-robin pool (CPU-scored, background)
-            # CRISPR scoring runs in _crispr_loop — these entries are skipped in
-            # the main GPU loop via the target_type gate below.
+            # Rebuild per-type queues from the fresh fetch; CRISPR excluded here
+            # (it injects entries only for the MSA prefetch below).
+            protein_targets = [t for t in targets
+                               if t.get("target_type") not in ("mRNA", "CRISPR")]
+            mrna_targets    = [t for t in targets
+                               if t.get("target_type") == "mRNA"]
+            log.info(f"  Scheduling queues: {len(protein_targets)} protein, "
+                     f"{len(mrna_targets)} mRNA (CRISPR in background thread)")
+
+            # Inject CRISPR targets for MSA prefetch only — not into scheduling queues.
+            # CRISPR scoring runs in _crispr_loop; these entries never reach Boltz2 here.
             if _CRISPR_AVAILABLE:
                 existing_ids = {t["id"] for t in targets}
                 for ct in _CRISPR_TARGETS:
@@ -2205,12 +2281,29 @@ def main():
         # all other miners benefit automatically.  No-op when epoch is live.
         _maybe_advance_epoch()
 
-        # Round-robin over all fetched targets; submission eligibility is separate
-        # Skip CRISPR targets — they are handled by the background _crispr_loop thread
-        target = targets[target_idx % len(targets)]
-        target_idx += 1
-        if target.get("target_type") == "CRISPR":
-            continue   # GPU loop skips CRISPR; background thread handles it
+        # Weighted protein / mRNA target selection.
+        # _mrna_budget counts how many mRNA picks remain before we take a protein pick.
+        # When budget > 0 and mRNA exists → pick mRNA and decrement.
+        # When budget == 0 → pick protein and reload the budget.
+        # Fallback: if the chosen queue is empty, use the other.
+        if not protein_targets and not mrna_targets:
+            time.sleep(5)
+            continue
+
+        if _mrna_budget > 0 and mrna_targets:
+            target = mrna_targets[mrna_idx % len(mrna_targets)]
+            mrna_idx     += 1
+            _mrna_budget -= 1
+        elif protein_targets:
+            target = protein_targets[protein_idx % len(protein_targets)]
+            protein_idx  += 1
+            # Reload budget: MRNA_SCHEDULE_WEIGHT picks next, but only when mRNA exists
+            _mrna_budget  = MRNA_SCHEDULE_WEIGHT if mrna_targets else 0
+        else:
+            # Budget says mRNA but queue is empty — fall back to protein
+            target = protein_targets[protein_idx % len(protein_targets)]
+            protein_idx  += 1
+            _mrna_budget  = 0  # stay on protein until next refresh populates mRNA
 
         tid    = target["id"]
         thresh = target.get("target_score_threshold", -7.0)
@@ -2242,7 +2335,8 @@ def main():
         log.info("Running Boltz2 GPU scoring...")
 
         t0      = time.time()
-        result  = run_boltz2_scoring(mol, target)
+        with _GPU_LOCK:
+            result  = run_boltz2_scoring(mol, target)
         elapsed = time.time() - t0
 
         boltz_score     = result.get("boltz_score")
