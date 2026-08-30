@@ -57,6 +57,7 @@ LIFE_DIR   = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = LIFE_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 CRISPR_JSONL = OUTPUT_DIR / "life_crispr_scores.jsonl"
+BOLTZ_JSONL  = OUTPUT_DIR / "life_boltz_scores.jsonl"
 
 # ── Submission deduplication ───────────────────────────────────────────────────
 CRISPR_DEDUP_PATH   = OUTPUT_DIR / "crispr_dedup_history.json"
@@ -547,26 +548,82 @@ def generate_grna_candidates(
 # ── Cached best sequences ─────────────────────────────────────────────────────
 
 def _load_best_cached(target_id: str, top_n: int = 5) -> list[str]:
-    """Load best gRNA sequences from previous runs for this target."""
-    if not CRISPR_JSONL.exists():
-        return []
-    best: list[tuple[float, str]] = []
+    """Load best gRNA sequences from previous runs for this target.
+
+    Two sources are merged and de-duplicated:
+
+    1. life_crispr_scores.jsonl — analytical combined score (fast pre-screen,
+       written for all N=50 candidates every cycle).
+    2. life_boltz_scores.jsonl — real Boltz2 affinity for crispr_generated rows
+       (written unconditionally — HITs and near-misses alike).
+
+    A gRNA that scored poorly analytically but strongly in Boltz2 (a near-HIT
+    or outright HIT) would otherwise be silently dropped from the mutation pool
+    because only combined score was consulted.  Reading both files ensures every
+    sequence that was competitive by *either* measure stays available as a seed
+    for future cycles.
+
+    Scoring convention (unified 0–1 scale for ranking):
+      - Analytical:  score = combined  (already 0–1)
+      - Boltz2:      score = (-affinity - 6.0) / 2.5  clipped [0, 1]
+                     maps −8.5 kcal/mol → 1.0, −6.0 → 0.0
+    Only Boltz2 rows with affinity < −6.5 are included (strict less-than
+    excludes the analytical-fallback default of −6.5 used when Boltz2 fails).
+    When a sequence appears in both files the higher of the two scores wins.
+    """
+    best: dict[str, float] = {}  # upper-cased seq → unified score
+
+    # ── Source 1: analytical scores (existing) ────────────────────────────────
     try:
         for line in CRISPR_JSONL.read_text().splitlines():
             try:
-                row = json.loads(line)
+                row      = json.loads(line)
                 if row.get("target_id") != target_id:
                     continue
-                seq     = row.get("grna_seq", "")
-                combined = row.get("combined", 0.0)
+                seq      = row.get("grna_seq", "")
+                combined = float(row.get("combined", 0.0))
                 if seq and len(seq) == 20:
-                    best.append((float(combined), seq))
+                    key = seq.upper()
+                    if combined > best.get(key, -1.0):
+                        best[key] = combined
             except Exception:
                 pass
     except Exception:
         pass
-    best.sort(reverse=True)
-    return [s for _, s in best[:top_n]]
+
+    # ── Source 2: real Boltz2 scores (new) ───────────────────────────────────
+    # CRISPR rows in life_boltz_scores.jsonl store the gRNA 20-mer in the
+    # 'smiles' field and are tagged source='crispr_generated' / target_type='CRISPR'.
+    try:
+        for line in BOLTZ_JSONL.read_text().splitlines():
+            try:
+                row = json.loads(line)
+                if row.get("target_id") != target_id:
+                    continue
+                is_crispr = (
+                    row.get("source") == "crispr_generated"
+                    or row.get("target_type") == "CRISPR"
+                )
+                if not is_crispr:
+                    continue
+                seq      = row.get("smiles", "")   # gRNA stored in 'smiles' field
+                affinity = row.get("affinity")
+                if not seq or len(seq) != 20 or affinity is None:
+                    continue
+                affinity = float(affinity)
+                if affinity >= -6.5:               # exclude neutral/fallback entries
+                    continue
+                boltz_score = min(1.0, max(0.0, (-affinity - 6.0) / 2.5))
+                key = seq.upper()
+                if boltz_score > best.get(key, -1.0):
+                    best[key] = boltz_score
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+    return [seq for seq, _ in ranked[:top_n]]
 
 
 # ── Top-level entry point ─────────────────────────────────────────────────────

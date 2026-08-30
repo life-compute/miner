@@ -1178,14 +1178,16 @@ const PDB_MAP = {
   KRAS_mRNA: '6XRZ',
   MYC_mRNA:  '1NKP',
 }
-const FALLBACK_PDB = { target: 'TP53', id: '2OCJ' }
+const FALLBACK_PDB  = { target: 'TP53', id: '2OCJ' }
+const CRISPR_PDB_ID = '4OO8'
+const CRISPR_CAPTION = 'SpCas9–gRNA–DNA Complex (PDB 4OO8)'
 
 function ActiveStructurePanel({ currentTarget }) {
   const containerRef = useRef(null)
   const viewerRef    = useRef(null)
   const loadedRef    = useRef(null)   // tracks last loaded (target+pdbId)
   const [status, setStatus] = useState('LOADING…')
-  const [info,   setInfo]   = useState({ target: '—', pdbId: '—' })
+  const [info,   setInfo]   = useState({ target: '—', pdbId: '—', caption: null })
 
   // Dynamically load 3Dmol.js once
   useEffect(() => {
@@ -1197,24 +1199,28 @@ function ActiveStructurePanel({ currentTarget }) {
     return () => {}
   }, [])
 
-  // Resolve target → pdbId
+  // Resolve target → pdbId (CRISPR targets always use 4OO8)
   const resolveTarget = useCallback((raw) => {
     const key = (raw || '').replace(/^TARGET_/, '').toUpperCase()
+    // CRISPR targets: any target ending in _CRISPR uses the shared Cas9 structure
+    if (key.endsWith('_CRISPR') || (raw || '').toUpperCase().includes('_CRISPR')) {
+      return { target: key, pdbId: CRISPR_PDB_ID, caption: CRISPR_CAPTION }
+    }
     const id   = PDB_MAP[key] || PDB_MAP[raw] || null
-    if (id)  return { target: key, pdbId: id }
+    if (id)  return { target: key, pdbId: id, caption: null }
     // try partial match
     const found = Object.keys(PDB_MAP).find(k => raw && raw.toUpperCase().includes(k))
-    if (found) return { target: found, pdbId: PDB_MAP[found] }
-    return { target: FALLBACK_PDB.target, pdbId: FALLBACK_PDB.id }
+    if (found) return { target: found, pdbId: PDB_MAP[found], caption: null }
+    return { target: FALLBACK_PDB.target, pdbId: FALLBACK_PDB.id, caption: null }
   }, [])
 
   // Load structure whenever target changes
   useEffect(() => {
-    const { target: tgt, pdbId } = resolveTarget(currentTarget)
+    const { target: tgt, pdbId, caption } = resolveTarget(currentTarget)
     const key = `${tgt}:${pdbId}`
     if (loadedRef.current === key) return
     loadedRef.current = key
-    setInfo({ target: tgt, pdbId })
+    setInfo({ target: tgt, pdbId, caption })
     setStatus('FETCHING…')
 
     async function load() {
@@ -1298,6 +1304,12 @@ function ActiveStructurePanel({ currentTarget }) {
           </span>
         </div>
       </div>
+      {/* CRISPR caption — only shown for _CRISPR targets */}
+      {info.caption && (
+        <div style={{ marginTop: '4px', fontSize: '10px', color: T.textDim, textAlign: 'center', letterSpacing: '0.04em' }}>
+          {info.caption}
+        </div>
+      )}
     </Panel>
   )
 }
@@ -1764,86 +1776,6 @@ function CrisprPanel({ crispr }) {
   )
 }
 
-function PublicArtPanel({ art }) {
-  if (!art) return null
-  const { ready=false, n_rows=0, r2=null, ts=null } = art
-  const lastTrained = ts ? new Date(ts * 1000).toLocaleString() : '—'
-  return (
-    <Panel accent={T.purple}>
-      <div style={S.panelTitle}>
-        <span style={S.titleAccent(T.purple)}>🧠</span>
-        <span>ART MODEL STATUS</span>
-        <span style={{ marginLeft:'auto', ...S.pill(ready ? T.green : T.red) }}>
-          {ready ? 'READY' : 'NOT READY'}
-        </span>
-      </div>
-      {[
-        { k: 'MODEL_STATUS',  v: ready ? 'READY' : 'NOT READY', c: ready ? T.green : T.red },
-        { k: 'TRAINING_ROWS', v: n_rows,                          c: T.cyan },
-        { k: 'R²_SCORE',      v: r2 != null ? r2.toFixed(2) : '—', c: r2 != null && r2 >= 0.25 ? T.green : T.textDim },
-        { k: 'LAST_TRAINED',  v: lastTrained,                     c: T.textDim },
-      ].map(({ k, v, c }) => (
-        <div key={k} style={S.kv}>
-          <span style={{ color: T.textDim, fontSize: '11px' }}>{k}</span>
-          <span style={{ color: c, fontWeight: 700, textShadow: glow(c, 2), fontSize: '11px' }}>{v}</span>
-        </div>
-      ))}
-    </Panel>
-  )
-}
-
-function ArtPanel({ art }) {
-  if (!art) return null
-  const { ready=false, n_rows=0, r2=null, reason='—', boltz_accumulated=0,
-          retrain_progress=0, next_retrain_in=50, feature_importances={} } = art
-  const top5 = Object.entries(feature_importances).sort((a,b)=>b[1]-a[1]).slice(0,5)
-  return (
-    <Panel accent={T.purple}>
-      <div style={S.panelTitle}>
-        <span style={S.titleAccent(T.purple)}>🧠</span>
-        <span>LIFE ART — ML SCORER</span>
-        <span style={{ marginLeft:'auto', ...S.pill(ready ? T.green : T.red) }}>
-          {ready ? 'DEPLOYED' : 'TRAINING'}
-        </span>
-      </div>
-      <PrivateNote />
-      {[
-        { k: 'MODEL_READY', v: ready ? '✓ ACTIVE' : '✗ PENDING', c: T.green },
-        { k: 'TRAINING_ROWS', v: `${n_rows} / 50`, c: T.cyan },
-        { k: 'CV_R2_SCORE', v: r2 != null ? r2.toFixed(3) : '—', c: r2 != null && r2 >= 0.25 ? T.green : T.red },
-        { k: 'BOLTZ2_SCORED', v: boltz_accumulated, c: T.text },
-      ].map(({ k, v, c }) => (
-        <div key={k} style={S.kv}>
-          <span style={{ color: T.textDim, fontSize: '11px' }}>{k}</span>
-          <span style={{ color: c, fontWeight: 700, textShadow: glow(c, 2) }}>{v}</span>
-        </div>
-      ))}
-      <div style={{ marginTop: '8px' }}>
-        <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px', fontSize:'11px' }}>
-          <span style={{ color: T.textDim }}>NEXT_RETRAIN</span>
-          <span style={{ color: T.purple }}>{next_retrain_in} scores remaining</span>
-        </div>
-        <div style={S.progressTrack}>
-          <div style={{ position:'absolute', top:0, left:0, height:'100%',
-                        width:`${retrain_progress}%`, background: T.purple,
-                        boxShadow: `0 0 6px ${T.purple}`, transition:'width 0.8s ease' }} />
-        </div>
-      </div>
-      {top5.length > 0 && (
-        <div style={{ marginTop:'12px' }}>
-          <div style={{ ...S.label, marginBottom:'6px', letterSpacing:'0.12em' }}>TOP FEATURES</div>
-          {top5.map(([f, imp]) => (
-            <div key={f} style={{ ...S.kv, borderBottom:`1px solid #0a0a1a` }}>
-              <span style={{ color: T.textDim, fontSize:'10px' }}>{f}</span>
-              <span style={{ color: T.purple, fontSize:'10px' }}>{imp.toFixed(3)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </Panel>
-  )
-}
-
 function ScoutPanel({ scout, priv }) {
   if (!scout) return null
   const { last_family='—', last_phase='—', n_diverse=0, n_passed_filter=0, best_score=null, target_id='—' } = scout
@@ -1895,20 +1827,17 @@ function GeneratedPanel({ generated }) {
         <span style={{ marginLeft:'auto', color: T.purple }}>{generated.length} recent</span>
       </div>
       <PrivateNote />
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 80px 70px 70px', gap:'6px',
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 70px 70px', gap:'6px',
                     fontSize:'9px', color: T.textDim, letterSpacing:'0.1em',
                     padding:'4px 0', borderBottom:`1px solid ${T.border}`, marginBottom:'4px' }}>
-        <span>SMILES</span><span>ART</span><span>BOLTZ</span><span>METHOD</span>
+        <span>SMILES</span><span>BOLTZ</span><span>METHOD</span>
       </div>
       <div style={{ maxHeight:'220px', overflowY:'auto' }}>
         {generated.map((r, i) => (
-          <div key={i} style={{ display:'grid', gridTemplateColumns:'1fr 80px 70px 70px',
+          <div key={i} style={{ display:'grid', gridTemplateColumns:'1fr 70px 70px',
                                  gap:'6px', padding:'5px 0', borderBottom:`1px solid #0a0a15`,
                                  fontSize:'10px', alignItems:'center' }}>
             <span style={{ ...S.smiles, fontSize:'9px' }}>{r.smiles ?? '—'}</span>
-            <span style={{ color: r.art_score != null ? T.purple : T.textDim }}>
-              {r.art_score != null ? r.art_score.toFixed(3) : '—'}
-            </span>
             <span style={{ color: r.boltz_score != null ? T.green : T.textDim }}>
               {r.boltz_score != null ? r.boltz_score.toFixed(4) : '—'}
             </span>
@@ -2571,7 +2500,6 @@ export default function App() {
 
             <ScoringHistoryPanel history={scoring} />
             <NetworkPanel        network={network} />
-            <PublicArtPanel      art={pub?.art} />
             <ActiveStructurePanel currentTarget={target} />
             <ProteinNetPanel     proteinnet={pub?.proteinnet} />
             <CrisprNetPanel      crispr_net={pub?.crispr_net} />
@@ -2592,7 +2520,6 @@ export default function App() {
                   🔒 PRIVATE // LOCAL DIAGNOSTICS — NOT BROADCAST TO NETWORK
                 </div>
                 <PulsePanel     pulse={priv?.pulse} />
-                <ArtPanel       art={priv?.art} />
                 <ScoutPanel     scout={priv?.scout} priv={priv} />
                 <GeneratedPanel generated={priv?.generated} />
               </>
