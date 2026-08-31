@@ -1182,6 +1182,22 @@ def run_boltz2_mrna_scoring(smiles: str, target: dict) -> dict:
         log.info(f"  [mRNA-Boltz2] {target_id}  score={parsed['boltz_score']:.4f}"
                  f"  source={parsed['score_source']}"
                  f"  iptm={parsed.get('iptm')}")
+
+        # Sanity guard: iptm must be in [0, 1]; affinity_kcal must be in [-9, -6].
+        # Boltz2 can return out-of-range values on degenerate inputs; reject rather
+        # than submit a physically invalid claim to the validator.
+        iptm_val = parsed.get("iptm")
+        aff_val  = parsed.get("affinity_kcal")
+        if iptm_val is not None and not (0.0 <= iptm_val <= 1.0):
+            log.warning(f"  [mRNA-Boltz2] {target_id} iptm={iptm_val:.4f} out of [0,1] — "
+                        f"rejecting degenerate Boltz2 output")
+            return {"boltz_score": None, "model": "boltz2-gpu-mrna",
+                    "error": f"iptm {iptm_val:.4f} out of valid range [0,1]"}
+        if aff_val is not None and not (-9.5 <= aff_val <= -5.5):
+            log.warning(f"  [mRNA-Boltz2] {target_id} affinity_kcal={aff_val:.4f} "
+                        f"outside expected [-9.5,-5.5] — rejecting degenerate output")
+            return {"boltz_score": None, "model": "boltz2-gpu-mrna",
+                    "error": f"affinity_kcal {aff_val:.4f} outside valid range"}
         return {
             "boltz_score":   parsed["boltz_score"],
             "affinity_kcal": parsed.get("affinity_kcal"),

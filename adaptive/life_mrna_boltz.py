@@ -139,7 +139,7 @@ def parse_mrna_boltz_affinity(
         try:
             with open(affinity_file) as fh:
                 aff_data = json.load(fh)
-            # Also pull iptm from confidence file if available
+            # Pull iptm from confidence file if available
             iptm = None
             if confidence_file and confidence_file.exists():
                 with open(confidence_file) as fh2:
@@ -148,14 +148,15 @@ def parse_mrna_boltz_affinity(
             v0 = aff_data.get("affinity_probability_binary")
             v1 = aff_data.get("affinity_pred_value")
             if v0 is not None and v1 is not None:
-                # Defer heavy_atom_count normalisation to caller — return raw
-                # components so caller can compute (v0 - v1) / hac if needed.
-                # For now return the unnormalised difference as boltz_score
-                # (consistent with how nova_pulse_scorer returns it when hac=1).
                 boltz_score = float(v0) - float(v1)
+                # Always derive affinity_kcal from iptm, even when affinity JSON
+                # is present. The raw (v0-v1) combo is unbounded (can exceed 1.0)
+                # and must NOT be passed to _boltz_score_to_affinity(×30) in the
+                # caller. iptm is always the bounded quality signal (0-1).
+                aff_kcal = round(-6.0 - 3.0 * float(iptm), 4) if iptm is not None else None
                 return {
                     "boltz_score":   boltz_score,
-                    "affinity_kcal": None,           # affinity path; no iptm conversion
+                    "affinity_kcal": aff_kcal,
                     "iptm":          float(iptm) if iptm is not None else None,
                     "score_source":  "affinity",
                     "model":         "boltz2-gpu-mrna",
