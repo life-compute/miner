@@ -259,10 +259,11 @@
       <div class="step-num">3</div>
       <div class="step-content" style="flex:1; position:relative">
         <h3>Start mining</h3>
-        <p>Launches the miner with GPU passthrough. Dashboard opens at <a href="http://localhost:3000" style="color:var(--green)">localhost:3000</a>.</p>
+        <p>Launches the miner with GPU passthrough. Then open <a href="http://localhost:8765" style="color:var(--green)">http://localhost:8765</a> in your browser to see the dashboard.</p>
         <pre><span class="cmd-prefix">$ </span>docker run -d --gpus all --name life-compute-miner \
   -v ~/.life-compute:/root/.life-compute \
-  ghcr.io/life-compute/miner:latest<button class="copy-btn" onclick="copy(this,'docker run -d --gpus all --name life-compute-miner -v ~/.life-compute:/root/.life-compute ghcr.io/life-compute/miner:latest')">copy</button></pre>
+  -p 8765:8765 \
+  ghcr.io/life-compute/miner:latest<button class="copy-btn" onclick="copy(this,'docker run -d --gpus all --name life-compute-miner -v ~/.life-compute:/root/.life-compute -p 8765:8765 ghcr.io/life-compute/miner:latest')">copy</button></pre>
       </div>
     </div>
   </div>

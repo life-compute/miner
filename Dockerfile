@@ -28,5 +28,6 @@ COPY stats.json.template stats.json
 RUN useradd -m miner
 USER miner
 
-EXPOSE 3000
+EXPOSE 3001
+EXPOSE 8765
 ENTRYPOINT ["python3", "miner_daemon.py"]

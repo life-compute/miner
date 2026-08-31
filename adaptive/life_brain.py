@@ -49,6 +49,36 @@ EPOCHS              = 30    # training epochs per retrain
 LR                  = 3e-4
 EDGE_SIMILARITY_THRESHOLD = 0.7   # cosine sim threshold for snapshot edges
 
+# ── Target name lookup (ID → human-readable label for public snapshot) ─────────
+# Keeps brain.html honest: every target_name in the snapshot is a real gene name.
+_TARGET_NAME_MAP: dict[int, str] = {
+    # Protein targets (on-chain IDs 0–29)
+    0: "TP53",    1: "BRCA1",  2: "EGFR",   3: "HER2",   4: "KRAS",
+    5: "BCL2",    6: "CDK4",   7: "VEGFR2", 8: "PDL1",   9: "MDM2",
+    10: "BRAF",  11: "PTEN",  12: "MYC",   13: "STAT3", 14: "PIK3CA",
+    15: "MTOR",  16: "FGFR1", 17: "RET",   18: "AR",    19: "NTRK1",
+    20: "IDH1",  21: "FLT3",  22: "SMAD4", 23: "APC",   24: "PARP1",
+    25: "JAK2",  26: "ESR1",  27: "HDAC1", 28: "HDAC2", 29: "ABL1",
+    # mRNA targets (on-chain IDs 2000–2029)
+    2000: "MYC (mRNA)",      2001: "KRAS (mRNA)",    2002: "BCL2 (mRNA)",
+    2003: "EGFR (mRNA)",     2004: "HER2 (mRNA)",    2005: "BRAF (mRNA)",
+    2006: "MDM2 (mRNA)",     2007: "CDK4 (mRNA)",    2008: "CCND1 (mRNA)",
+    2009: "SURVIVIN (mRNA)",
+    2010: "PDL1 (mRNA)",     2011: "VEGF (mRNA)",    2012: "HIF1A (mRNA)",
+    2013: "IL-6 (mRNA)",     2014: "TNF (mRNA)",     2015: "TGFb1 (mRNA)",
+    2016: "CSF1R (mRNA)",    2017: "CCL2 (mRNA)",    2018: "CXCL12 (mRNA)",
+    2019: "MMP9 (mRNA)",
+    2020: "LDHA (mRNA)",     2021: "PKM2 (mRNA)",    2022: "GLUT1 (mRNA)",
+    2023: "HK2 (mRNA)",      2024: "FASN (mRNA)",
+    2025: "TERT (mRNA)",     2026: "PARP1 (mRNA)",   2027: "RAD51 (mRNA)",
+    2028: "BRCA2 (mRNA)",    2029: "ATM (mRNA)",
+    # CRISPR targets (on-chain IDs 3000–3009)
+    3000: "TP53 (CRISPR)",   3001: "KRAS (CRISPR)",  3002: "BCL2 (CRISPR)",
+    3003: "MYC (CRISPR)",    3004: "EGFR (CRISPR)",  3005: "HER2 (CRISPR)",
+    3006: "BRCA1 (CRISPR)",  3007: "PDL1 (CRISPR)",  3008: "TERT (CRISPR)",
+    3009: "CDK4 (CRISPR)",
+}
+
 # ── In-memory state ───────────────────────────────────────────────────────────
 _model          = None   # loaded nn.Module or None
 _report: dict   = {}     # last written report
@@ -176,13 +206,15 @@ def _fallback_mae_protein(held_target_id: int, held_rows: list[dict]) -> Optiona
         import pickle
         import numpy as np
         from adaptive.life_brain_model import featurize_smiles
-        # Try loading pkl from protein_models/
-        report_path = _PNET_REPORT_PATH / "proteinnet_report.json"
-        if not report_path.exists():
+        # _PNET_REPORT_PATH is the full path to proteinnet_report.json (not a directory).
+        if not _PNET_REPORT_PATH.exists():
             return None
-        report  = json.loads(report_path.read_text())
-        uid     = report.get("models", {}).get(str(held_target_id), {}).get("uniprot_id", str(held_target_id))
-        pkl_path = _PNET_REPORT_PATH / f"{uid}_model.pkl"
+        report = json.loads(_PNET_REPORT_PATH.read_text())
+        # Report keys are gene names (e.g. "PDL1"); target_id is an int — map via _TARGET_NAME_MAP.
+        gene_name = _TARGET_NAME_MAP.get(held_target_id, str(held_target_id))
+        uid = report.get("models", {}).get(gene_name, {}).get("uniprot_id", gene_name)
+        # pkl lives in the protein_models/ directory alongside the report, named <uid>_model.pkl.
+        pkl_path = _PNET_REPORT_PATH.parent / f"{uid}_model.pkl"
         if not pkl_path.exists():
             return None
         with pkl_path.open("rb") as fh:
@@ -205,21 +237,35 @@ def _fallback_mae_protein(held_target_id: int, held_rows: list[dict]) -> Optiona
         return None
 
 
+# Mapping from on-chain CRISPR integer target_id (3000–3009) to the gene-name prefix
+# used in crispr_net_models/<NAME>_CRISPR_model.pkl filenames.
+_CRISPR_INT_TO_GENE: dict[int, str] = {
+    3000: "TP53_CRISPR",  3001: "KRAS_CRISPR",  3002: "BCL2_CRISPR",
+    3003: "MYC_CRISPR",   3004: "EGFR_CRISPR",  3005: "HER2_CRISPR",
+    3006: "BRCA1_CRISPR", 3007: "PDL1_CRISPR",  3008: "TERT_CRISPR",
+    3009: "CDK4_CRISPR",
+}
+
+
 def _fallback_mae_crispr(held_target_id: int, held_rows: list[dict]) -> Optional[float]:
     """Predict held-out rows with existing CRISPR-Net GBR; return MAE or None."""
     try:
         import pickle
         import numpy as np
-        from adaptive.life_brain_model import featurize_crispr_handcrafted
-        tid_str  = str(held_target_id)
-        pkl_path = _LIFE_DIR / "output" / "crispr_net_models" / f"{tid_str}_model.pkl"
+        # CRISPR-Net GBRs were trained with life_crispr_net._featurize (20-dim).
+        # Do NOT use featurize_crispr_handcrafted from life_brain_model (25-dim) — wrong shape.
+        from adaptive.life_crispr_net import _featurize as _cnet_featurize
+        # Files are named <GENE>_CRISPR_model.pkl (e.g. BCL2_CRISPR_model.pkl),
+        # not <int>_model.pkl — map the on-chain integer to the gene-name prefix.
+        gene_prefix = _CRISPR_INT_TO_GENE.get(held_target_id, str(held_target_id))
+        pkl_path = _OUTPUT_DIR / "crispr_net_models" / f"{gene_prefix}_model.pkl"
         if not pkl_path.exists():
             return None
         with pkl_path.open("rb") as fh:
             gbr = pickle.load(fh)
         X, y = [], []
         for r in held_rows:
-            hc = featurize_crispr_handcrafted(r.get("sequence", ""))
+            hc = _cnet_featurize(r.get("sequence", ""), gene_prefix)
             if hc is None:
                 continue
             try:
@@ -657,7 +703,8 @@ def export_snapshot(model, report: dict, rows: list[dict]) -> None:
                 modality  = row.get("modality", "protein")
                 unique_targets[tid] = {
                     "target_id":   tid,
-                    "target_name": row.get("target_name", str(tid)),
+                    # Use the canonical name map; fall back to row metadata, then numeric ID.
+                    "target_name": _TARGET_NAME_MAP.get(tid, row.get("target_name", str(tid))),
                     "modality":    modality,
                     "row_count":   0,
                 }
@@ -743,9 +790,56 @@ def export_snapshot(model, report: dict, rows: list[dict]) -> None:
         }
         _SNAPSHOT_PATH.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
         log.info(f"[LIFE-BRAIN] Snapshot exported: {len(nodes)} nodes, {len(edges)} edges → {_SNAPSHOT_PATH}")
+        _push_snapshot_to_github()
 
     except Exception as e:
         log.error(f"[LIFE-BRAIN] export_snapshot failed: {e}", exc_info=True)
+
+
+def _push_snapshot_to_github() -> None:
+    """
+    Commit and push life_brain_snapshot.json to the miner repo after each export.
+    Logs loudly on failure — never silently swallowed.
+    Expects the repo to already have a remote and credentials configured
+    (SSH key or GH_TOKEN env var via credential helper).
+    """
+    import subprocess, shutil
+    repo_dir = _LIFE_DIR
+    git = shutil.which("git")
+    if not git:
+        log.error("[LIFE-BRAIN] git not found on PATH — snapshot NOT pushed to GitHub. "
+                  "Install git so the public brain page receives live data.")
+        return
+
+    rel_path = "output/life_brain_snapshot.json"
+    cmds = [
+        ([git, "add", rel_path],                           "git add"),
+        ([git, "commit", "--allow-empty", "-m",
+          f"chore: LIFE-BRAIN snapshot {__import__('datetime').datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}"],
+                                                           "git commit"),
+        ([git, "push", "origin", "HEAD"],                  "git push"),
+    ]
+    for cmd, label in cmds:
+        try:
+            result = subprocess.run(
+                cmd, cwd=str(repo_dir),
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                log.error(
+                    f"[LIFE-BRAIN] {label} FAILED (rc={result.returncode}) — "
+                    f"snapshot NOT live on GitHub. "
+                    f"stdout={result.stdout.strip()!r}  stderr={result.stderr.strip()!r}"
+                )
+                return   # stop; don't push if commit failed, etc.
+            log.info(f"[LIFE-BRAIN] {label} OK")
+        except subprocess.TimeoutExpired:
+            log.error(f"[LIFE-BRAIN] {label} TIMED OUT after 60s — snapshot NOT pushed to GitHub.")
+            return
+        except Exception as exc:
+            log.error(f"[LIFE-BRAIN] {label} raised {exc!r} — snapshot NOT pushed to GitHub.")
+            return
+    log.info("[LIFE-BRAIN] Snapshot pushed to GitHub successfully.")
 
 
 def _write_empty_snapshot(report: dict) -> None:
