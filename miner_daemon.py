@@ -83,6 +83,22 @@ except Exception as _crispr_boltz_err:
     def build_crispr_boltz_input_yaml(grna_20mer: str) -> str:  # type: ignore[misc]
         raise RuntimeError("life_crispr_boltz not available")
 
+# ── mRNA Boltz2 GPU scorer ─────────────────────────────────────────────────────
+try:
+    from adaptive.life_mrna_boltz import (
+        build_mrna_boltz_input_yaml,
+        parse_mrna_boltz_affinity,
+    )
+    _MRNA_BOLTZ_AVAILABLE = True
+except Exception as _mrna_boltz_err:
+    _MRNA_BOLTZ_AVAILABLE = False
+
+    def build_mrna_boltz_input_yaml(rna_sequence: str, smiles: str) -> str:  # type: ignore[misc]
+        raise RuntimeError("life_mrna_boltz not available")
+
+    def parse_mrna_boltz_affinity(*_a, **_kw) -> None:  # type: ignore[misc]
+        return None
+
 # ── LIFE PULSE — continuous Sobol molecular sweep ─────────────────────────────
 try:
     from adaptive.life_pulse import (
@@ -1055,6 +1071,125 @@ def run_boltz2_crispr_scoring(grna_seq: str) -> dict:
             "confidence_score": parsed.get("confidence_score"),
             "model":            "boltz2-gpu-crispr",
             "error":            None,
+        }
+
+
+# ── Boltz2 mRNA scoring ────────────────────────────────────────────────────────
+
+def run_boltz2_mrna_scoring(smiles: str, target: dict) -> dict:
+    """
+    Run Boltz2 GPU inference for a small molecule against an mRNA target region.
+
+    Uses a 2-chain YAML:
+        Chain A (rna)    : target rna_sequence from targets.json
+        Chain B (ligand) : candidate SMILES
+
+    Score: ipTM from confidence JSON (structure confidence, 0-1).
+    Falls back gracefully if affinity JSON is present (Boltz2 RNA + ligand mode).
+    Returns boltz_score = iptm, or None on failure.
+    The caller converts via _boltz_score_to_affinity(), same as the protein path.
+
+    Does NOT touch run_boltz2_scoring() or the protein/MSA path.
+    """
+    if not _MRNA_BOLTZ_AVAILABLE:
+        log.warning("  [mRNA-Boltz2] life_mrna_boltz not available — skipping")
+        return {"boltz_score": None, "model": "boltz2-gpu-mrna",
+                "error": "life_mrna_boltz not available"}
+
+    rna_seq = target.get("rna_sequence", "")
+    if not rna_seq:
+        log.warning(f"  [mRNA-Boltz2] {target.get('id','?')} has no rna_sequence — skipping")
+        return {"boltz_score": None, "model": "boltz2-gpu-mrna",
+                "error": "no rna_sequence in target"}
+
+    import hashlib as _hashlib
+    target_id = target["id"]
+    mol_id    = int(_hashlib.sha256((smiles + target_id).encode()).hexdigest()[:8], 16) % (2**31 - 1)
+    target_stem = target_id.lower().replace("_", "-")  # e.g. "myc-mrna"
+
+    with tempfile.TemporaryDirectory(prefix="life-mrna-boltz-") as tmp_root:
+        tmp_path = Path(tmp_root)
+        in_dir   = tmp_path / "inputs"
+        out_dir  = tmp_path / "outputs"
+        in_dir.mkdir()
+        out_dir.mkdir()
+
+        # Write 2-chain YAML
+        try:
+            yaml_content = build_mrna_boltz_input_yaml(rna_seq, smiles)
+            yaml_path    = in_dir / f"{mol_id}_{target_stem}.yaml"
+            yaml_path.write_text(yaml_content)
+        except Exception as e:
+            log.warning(f"  [mRNA-Boltz2] YAML build failed: {e}")
+            return {"boltz_score": None, "model": "boltz2-gpu-mrna",
+                    "error": f"YAML build failed: {e}"}
+
+        # Reuse _CRISPR_BOLTZ_HELPER — it only calls boltz.main.predict(data, out_dir, ...)
+        # which is chain-type-agnostic; the YAML content determines chain layout.
+        helper_src  = _CRISPR_BOLTZ_HELPER.format(nova_dir=str(NOVA_DIR))
+        args_json   = json.dumps({
+            "grna_seq": smiles,   # field name is vestigial; value unused by helper
+            "mol_id":   mol_id,
+            "in_dir":   str(in_dir),
+            "out_dir":  str(out_dir),
+            "seed":     BOLTZ_SEED,
+        })
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False,
+                                        prefix="life-mrna-helper-") as f:
+            f.write(helper_src)
+            helper_path = f.name
+        try:
+            r = subprocess.run(
+                [str(NOVA_VENV), helper_path, args_json],
+                capture_output=True, text=True, timeout=300,
+                cwd=str(NOVA_DIR),
+            )
+        finally:
+            os.unlink(helper_path)
+
+        if r.returncode != 0:
+            log.warning(f"  [mRNA-Boltz2] stderr: {r.stderr[-400:]}")
+            return {"boltz_score": None, "model": "boltz2-gpu-mrna",
+                    "error": r.stderr[-200:]}
+
+        # Confirm predict() reported ok
+        helper_ok = False
+        for line in reversed(r.stdout.strip().splitlines()):
+            try:
+                hres = json.loads(line)
+                if not hres.get("ok", False):
+                    log.warning(f"  [mRNA-Boltz2] predict() error: {hres.get('error')}")
+                    return {"boltz_score": None, "model": "boltz2-gpu-mrna",
+                            "error": hres.get("error")}
+                helper_ok = True
+                break
+            except Exception:
+                continue
+
+        if not helper_ok:
+            log.warning(f"  [mRNA-Boltz2] stdout unparseable: {r.stdout[-200:]}")
+            return {"boltz_score": None, "model": "boltz2-gpu-mrna",
+                    "error": "predict() stdout unparseable"}
+
+        # Parse output — affinity first, iptm fallback
+        predictions_dir = out_dir / "boltz_results_inputs" / "predictions"
+        parsed = parse_mrna_boltz_affinity(predictions_dir, mol_id, target_stem)
+        if parsed is None:
+            log.warning(f"  [mRNA-Boltz2] no parseable output for {target_id}")
+            return {"boltz_score": None, "model": "boltz2-gpu-mrna",
+                    "error": "no output parsed"}
+
+        log.info(f"  [mRNA-Boltz2] {target_id}  score={parsed['boltz_score']:.4f}"
+                 f"  source={parsed['score_source']}"
+                 f"  iptm={parsed.get('iptm')}")
+        return {
+            "boltz_score":   parsed["boltz_score"],
+            "affinity_kcal": parsed.get("affinity_kcal"),
+            "iptm":          parsed.get("iptm"),
+            "score_source":  parsed.get("score_source"),
+            "model":         "boltz2-gpu-mrna",
+            "error":         None,
+            "seed":          BOLTZ_SEED,
         }
 
 
@@ -2336,7 +2471,12 @@ def main():
 
         t0      = time.time()
         with _GPU_LOCK:
-            result  = run_boltz2_scoring(mol, target)
+            if is_mrna:
+                # Dedicated mRNA path: RNA chain + ligand YAML, ipTM score.
+                # Protein path (run_boltz2_scoring) is NOT called for mRNA targets.
+                result = run_boltz2_mrna_scoring(mol, target)
+            else:
+                result = run_boltz2_scoring(mol, target)
         elapsed = time.time() - t0
 
         boltz_score     = result.get("boltz_score")
