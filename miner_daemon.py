@@ -2481,7 +2481,12 @@ def main():
 
         boltz_score     = result.get("boltz_score")
         boltz_seed_used = result.get("seed", BOLTZ_SEED)
-        affinity        = _boltz_score_to_affinity(boltz_score)
+        # mRNA scorer pre-computes affinity_kcal via -6.0 - 3.0×iptm; use it
+        # directly to avoid applying the protein ×30 formula to an iptm value.
+        if is_mrna and result.get("affinity_kcal") is not None:
+            affinity = result["affinity_kcal"]
+        else:
+            affinity = _boltz_score_to_affinity(boltz_score)
 
         if is_ref and affinity is not None:
             ref_scores[tid] = affinity
