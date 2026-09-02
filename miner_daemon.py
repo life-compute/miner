@@ -38,6 +38,108 @@ except Exception as _e:
     _TOOLS_AVAILABLE = False
     _tools_err = str(_e)
 
+# ── Reward-decay similarity functions (CRISPR: live; generate: log-only) ─────
+_REWARD_DECAY_AVAILABLE = False
+_rds_tanimoto          = None
+_rds_grna_sim          = None
+_rds_sim_mult          = None
+_rds_sim_band          = None
+_rds_find_crispr_parent = None
+_rds_gen_parents:       dict = {}
+_rds_pulse_parents:     dict = {}
+_rds_crispr_history:    dict = {}
+try:
+    import importlib.util as _ilu
+    _rds_path = Path(__file__).resolve().parent / "scripts" / "reward_decay_sim.py"
+    _rds_spec = _ilu.spec_from_file_location("reward_decay_sim", _rds_path)
+    if _rds_spec and _rds_spec.loader:
+        _rds_mod = _ilu.module_from_spec(_rds_spec)
+        _rds_spec.loader.exec_module(_rds_mod)  # type: ignore[union-attr]
+        _rds_tanimoto           = _rds_mod.morgan_tanimoto
+        _rds_grna_sim           = _rds_mod.grna_similarity
+        _rds_sim_mult           = _rds_mod.similarity_multiplier
+        _rds_sim_band           = _rds_mod.similarity_band
+        _rds_find_crispr_parent = _rds_mod._find_crispr_parent
+        _rds_gen_parents        = _rds_mod._load_generate_parents()
+        _rds_pulse_parents      = _rds_mod._load_pulse_parents()
+        _rds_crispr_history     = _rds_mod._load_crispr_history()
+        _REWARD_DECAY_AVAILABLE = True
+except Exception as _rds_err:
+    pass   # non-fatal; decay disabled, full rewards paid
+
+
+def _apply_crispr_decay(logger, target_id: str, grna_seq: str, base_reward: float) -> float:
+    """
+    Apply Hamming-proxy similarity decay to a crispr_generated HIT.
+
+    Looks up the closest prior submitted gRNA for target_id by Hamming distance
+    (proxy for the mutation parent — exact parent_seq tracking is a future
+    improvement, see life_crispr.py _mutate_20mer callers).
+
+    Brackets (same thresholds as the validated scheme):
+      similarity >= 0.85  →  0.35× base  (near-clone of proven hotspot)
+      similarity >= 0.70  →  0.65× base  (close neighbour)
+      similarity <  0.70  →  1.00× base  (genuinely novel, full reward)
+      no prior seqs found →  1.00× base  (benefit of the doubt)
+
+    generate / zinc15 / ref sources are completely unaffected.
+    Returns the actual $LIFE amount to credit.
+    """
+    if not _REWARD_DECAY_AVAILABLE:
+        return base_reward
+    try:
+        parent  = _rds_find_crispr_parent(grna_seq, target_id, _rds_crispr_history)   # type: ignore[misc]
+        sim     = _rds_grna_sim(grna_seq, parent) if parent else None                  # type: ignore[misc]
+        mult    = _rds_sim_mult(sim)                                                    # type: ignore[misc]
+        earned  = round(base_reward * mult, 4)
+        band    = _rds_sim_band(sim)                                                    # type: ignore[misc]
+        sim_str = f"{sim:.4f}" if sim is not None else "N/A (no prior seqs)"
+        par_str = (parent or "")[:25]
+        logger.info(
+            f"  [REWARD-DECAY] CRISPR target={target_id}  "
+            f"parent={par_str}  similarity={sim_str}  band={band}  "
+            f"base={base_reward}  earned={earned}"
+        )
+        return earned
+    except Exception as _rde:
+        logger.debug(f"  [REWARD-DECAY] error (fallback full reward): {_rde}")
+        return base_reward
+
+
+def _log_reward_decay_sim(
+    logger,
+    target_id:      str,
+    source:         str,
+    mol:            str,
+    parent:         "str | None",
+    current_reward: float,
+) -> None:
+    """
+    Log-only decay diagnostic for generate/mutant sources.
+    DOES NOT change any payout — generate is confirmed novel (mean sim=0.31).
+    CRISPR decay is now live via _apply_crispr_decay(); this function is
+    retained for generate/mutant diagnostic logging only.
+    zinc15, ref, and proteinnet sources are completely unaffected.
+    """
+    if not _REWARD_DECAY_AVAILABLE:
+        return
+    try:
+        sim             = _rds_tanimoto(mol, parent) if parent else None   # type: ignore[misc]
+        mult            = _rds_sim_mult(sim)                               # type: ignore[misc]
+        proposed_reward = round(current_reward * mult, 4)
+        band            = _rds_sim_band(sim)                               # type: ignore[misc]
+        sim_str         = f"{sim:.4f}" if sim is not None else "N/A"
+        par_str         = (parent or "")[:60]
+        logger.info(
+            f"  [REWARD-DECAY-SIM] target={target_id}  parent={par_str}  "
+            f"similarity={sim_str}  band={band}  "
+            f"current_reward={current_reward}  proposed_reward={proposed_reward}  "
+            f"(LOG ONLY — generate confirmed novel, no decay applied)"
+        )
+    except Exception as _rde:
+        logger.debug(f"  [REWARD-DECAY-SIM] non-fatal error: {_rde}")
+
+
 # ── CRISPR gRNA optimizer ─────────────────────────────────────────────────────
 try:
     from adaptive.life_crispr import (
@@ -1775,6 +1877,14 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
                 tx_sig = resp.get("signature", "")
                 life_delta = 3.0 if is_ref else {1: 1.0, 2: 5.0, 3: 25.0}.get(target.get("difficulty_tier", 1), 1.0)
                 wlog.info(f"  ✔ tx: {tx_sig}")
+                # ── Reward-decay similarity logging (LOG ONLY — no payout change) ──
+                if source in ("generate", "mutant", "crispr_generated") and not is_ref:
+                    _parent = (
+                        _rds_gen_parents.get(mol)   if source == "generate"  else
+                        _rds_pulse_parents.get(mol)  if source == "mutant"    else
+                        None  # CRISPR: no explicit parent yet (Part 1 gap)
+                    )
+                    _log_reward_decay_sim(wlog, tid, source, mol, _parent, life_delta)
 
         # Accumulate into shared manager dict
         try:
@@ -2284,7 +2394,12 @@ def main():
                             )
                             # CRISPR targets are all tier Crispr = 7 LIFE initial reward.
                             # Supply/hit halvings are applied on-chain by mint_reward.rs.
-                            _crispr_stats["life_earned"] += REWARD_CRISPR_LIFE
+                            # Similarity decay applied live (Hamming-proxy parent).
+                            # generate / zinc15 / ref are completely unaffected.
+                            _crispr_life = _apply_crispr_decay(
+                                log, tid, grna_seq, REWARD_CRISPR_LIFE
+                            )
+                            _crispr_stats["life_earned"] += _crispr_life
                             _crispr_stats["molecules_screened"] += 1
                         elif resp and resp.get("status") == "already_submitted":
                             log.info("[CRISPR] Already submitted this epoch")
@@ -2582,6 +2697,14 @@ def main():
                 life_earned += _tier_reward
                 log.info(f"  ✔ tx: {tx_sig}")
                 log.info(f"  Explorer: https://explorer.solana.com/tx/{tx_sig}?cluster=devnet")
+                # ── Reward-decay similarity logging (LOG ONLY — no payout change) ──
+                if source in ("generate", "mutant", "crispr_generated") and not is_ref:
+                    _parent = (
+                        _rds_gen_parents.get(mol)    if source == "generate"  else
+                        _rds_pulse_parents.get(mol)  if source == "mutant"    else
+                        None  # CRISPR: no explicit parent yet (Part 1 gap)
+                    )
+                    _log_reward_decay_sim(log, tid, source, mol, _parent, _tier_reward)
                 txs.append({"tx": tx_sig, "target": tid, "score": affinity,
                              "boltz_score": boltz_score,
                              "chembl_novel": chembl_result.get("is_novel"),
