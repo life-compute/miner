@@ -55,9 +55,57 @@ GPU scores molecules → results submitted on-chain → validators verify → $L
 2. Boltz2 GPU inference predicts binding affinity for drug-like molecules against each target
 3. Hits (predicted binding score ≤ threshold) are submitted to the Solana program on-chain
 4. Validators independently verify the structure prediction
-5. Your wallet receives $LIFE per verified hit (amount depends on target difficulty and halving schedule)
+5. Your wallet receives $LIFE per verified hit (a flat amount set by target difficulty — no halving, no supply cap)
 
 Read the full vision in **[WHITEPAPER.md](https://github.com/life-compute/miner/blob/main/WHITEPAPER.md)**.
+
+---
+
+## $LIFE Tokenomics
+
+> There is no ceiling on $LIFE. There is only the work. Every token in existence is proof that a real computation happened — a real GPU, a real target, a real independently-verified result. Supply does not stop at a number. It stops when there is nothing left to discover.
+
+**Total supply is a live figure, not a target.** At every moment it is defined as
+*total minted minus total burned*. It rises only when real work is verified and
+mints new $LIFE through the program's official reward-payout path. There is no
+fixed cap, no artificial ceiling, and no halving schedule.
+
+> $LIFE can only ever be created by real, verified work — running inference against real cancer targets, independently confirmed by a second machine. There is no other way for new $LIFE to come into existence. Once earned, it can be freely held or traded — but no one can ever buy their way into being the one who discovered it.
+
+### Rewards per verified hit
+
+Flat rates. No halving, no time-based reduction, no supply-based reduction.
+
+| Difficulty | Reward | Description |
+|---|---|---|
+| Easy | **0.3 $LIFE** | Well-characterized binding pocket |
+| Medium | **0.7 $LIFE** | Partial structural data available |
+| Hard | **0.9 $LIFE** | Novel, poorly characterized target |
+| mRNA silencing | **0.9 $LIFE** | Always Hard tier |
+| CRISPR gRNA | **0.252 $LIFE** | Knockout targets (CPU-scored) |
+| Reference compound | **0.108 $LIFE** | Known-binder control |
+| Discovery bonus | **100 $LIFE** | Top affinity for a target that week |
+
+### Per-target maturity taper
+
+The one reduction that remains is **not** a monetary schedule — it reflects
+diminishing scientific return. The thousandth confirmed hit on a target teaches
+less than the first, so reward tapers with how well-explored that target is:
+
+| Verified hits on target | Multiplier |
+|---|---|
+| 0 – 99 | 100% of tier reward |
+| 100 – 999 | 75% of tier reward |
+| 1,000+ | 50% of tier reward |
+
+Example: a Hard target with 150 confirmed hits pays `0.9 × 0.75 = 0.675 $LIFE`.
+
+$LIFE is a standard SPL token. There is no transfer hook, no burn-on-transfer,
+and no restriction on trading once earned — a miner who earned it can sell or
+trade it on any Solana DEX. The market redistributes already-earned tokens; it
+never creates new supply.
+
+> This does not mean $LIFE cures disease. It means $LIFE only exists where real computational science — narrowing the search for what might — has genuinely happened.
 
 ---
 

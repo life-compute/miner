@@ -366,22 +366,37 @@ _GPU_LOCK = threading.Lock()
 CRISPR_MAX_SUBMISSIONS_PER_EPOCH: int = 3
 
 # ── Tokenomics constants (mirrors constants.rs) ───────────────────────────────
-# Initial rewards per tier before any epoch-based halving.
-REWARD_EASY_LIFE:   float = 1.0
-REWARD_MEDIUM_LIFE: float = 5.0
-REWARD_HARD_LIFE:   float = 25.0
-REWARD_CRISPR_LIFE: float = 7.0   # gRNA knockout targets (CPU-scored)
-REWARD_MRNA_LIFE:   float = 25.0  # mRNA silencing targets
-HALVING_INTERVAL:   int   = 210_000  # epochs per halving (~1 yr on mainnet)
+# Flat rewards per tier.  NO halving, NO schedule, NO supply-based reduction.
+# These are the only emission control in the protocol.
+#
+# There is no fixed supply cap.  Total supply is `total_minted - total_burned`:
+# a live, running figure that rises only when real verified work mints new
+# $LIFE through the program's official reward-payout path.
+#
+# Reduced 2026-09: the previous 25/5/1 scale emitted ~157,500 LIFE/epoch at
+# 2,000 miners x 3 submissions, which would have exhausted the old 21,000,000
+# cap in under two days at the live 6.67-minute epoch length.  Hard was cut
+# 25 -> 0.9 (27.78x); other tiers scaled to preserve sane relativities.
+REWARD_EASY_LIFE:      float = 0.3
+REWARD_MEDIUM_LIFE:    float = 0.7
+REWARD_HARD_LIFE:      float = 0.9
+REWARD_CRISPR_LIFE:    float = 0.252  # gRNA knockout targets (CPU-scored)
+REWARD_MRNA_LIFE:      float = 0.9    # mRNA silencing targets (always Hard)
+REWARD_REFERENCE_LIFE: float = 0.108  # reference compounds (3.0 x 0.9/25)
 
-def current_epoch_reward(base_life: float, epoch: int) -> float:
-    """Return the current effective reward after epoch-based halving.
+# Canonical tier map — mirrors Rust DifficultyTier::base_reward_raw().
+# Use this instead of re-declaring tier values inline, so the miner can never
+# drift from the on-chain constants.
+TIER_REWARD_LIFE: dict[int, float] = {
+    1: REWARD_EASY_LIFE,
+    2: REWARD_MEDIUM_LIFE,
+    3: REWARD_HARD_LIFE,
+}
 
-    Mirrors rewards.rs Layer 0: base >> (epoch // HALVING_INTERVAL), min 1 raw unit.
-    Result is in $LIFE (not raw units).  Supply/hit halvings are on-chain only.
-    """
-    halvings = epoch // HALVING_INTERVAL
-    return max(base_life / (2 ** halvings), 1 / 1_000_000)  # 1 raw unit floor
+# Per-target hit-count taper (Layer 2) is applied ON-CHAIN by rewards.rs.
+# It is NOT a monetary schedule — it reflects diminishing scientific return as
+# a target is explored (>=100 hits -> 75%, >=1000 hits -> 50%).  The miner logs
+# the pre-taper base reward; the chain is authoritative for the final amount.
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1429,6 +1444,42 @@ def _discovery_top10_threshold(target_id: str, current_affinity: float) -> bool:
     return qualifies
 
 
+def _seed_crispr_targets() -> frozenset[str]:
+    """Recover the set of CRISPR targets already scored, from the JSONL feed.
+
+    stats["targets_contributed"] is rebuilt from live in-memory state on every
+    write, so a restart drops the CRISPR half back to whatever the background
+    thread has re-scored since boot — one target per ~6.5 min Boltz2 batch,
+    leaving the ACTIVE TARGETS panel apparently "stuck at 1" for an hour while
+    the system is in fact healthy.  PROTEIN/RNA hide the same reset because
+    their ~2000-target rotation repopulates `txs` within a couple of cycles.
+
+    output/life_boltz_scores.jsonl is the same real feed the /crispr endpoint
+    reads, and _crispr_loop appends to it for every scored candidate, so it is
+    an accurate record of work actually done.  Classification mirrors
+    server.cjs:605 — target_type or the "_CRISPR" suffix, for legacy rows.
+    """
+    path  = WORK_DIR / "output" / "life_boltz_scores.jsonl"
+    known = {t["id"] for t in _CRISPR_TARGETS} or None
+    seen: set[str] = set()
+    try:
+        with path.open() as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                tid = str(row.get("target_id") or "")
+                if tid and (row.get("target_type") == "CRISPR"
+                            or tid.endswith("_CRISPR")):
+                    seen.add(tid)
+                    if known and seen >= known:
+                        break  # every known target found — skip the rest
+    except FileNotFoundError:
+        pass
+    return frozenset(seen)
+
+
 def _next_discovery_numbers(target_id: str, registry_path: Path) -> tuple[int, int]:
     """Return (global_discovery_number, per_target_rank)."""
     try:
@@ -2019,7 +2070,10 @@ def main():
     targets            : list             = []
     last_refresh       : float            = 0.0
     molecules_done     : int              = 0
-    life_earned        : float            = 0.0
+    life_earned        : float            = 0.0   # optimistic (submitted tx landed)
+    _confirm_lock      : threading.Lock   = threading.Lock()
+    _pending_pdas      : list             = []    # dicts: {pda, tier_reward, confirmed}
+    _confirmed_state   : dict             = {"total": 0.0, "tx_confirmed": 0, "tx_submitted": 0}  # validator-confirmed $LIFE + count-based counters
     txs                : list             = []
     ref_compounds      : dict[str, str]   = {}
     ref_scores         : dict[str, float] = {}
@@ -2123,7 +2177,26 @@ def main():
     # Shared mutable counter: main stats loop reads these to include CRISPR
     # earnings in the dashboard $LIFE total without a threading.Lock (GIL-safe
     # for float/int reads on CPython).
-    _crispr_stats: dict = {"life_earned": 0.0, "molecules_screened": 0}
+    # "targets" holds the CRISPR target ids this thread has actively scored.
+    # The CRISPR thread never appends to `txs` (that list is owned by the main
+    # sequential loop and drives confirmation tracking), so CRISPR targets would
+    # otherwise never reach stats["targets_contributed"] — which is what the
+    # dashboard's ACTIVE TARGETS panel counts (targets ending in "_CRISPR").
+    # Writes rebind the key to a brand-new frozenset instead of mutating in
+    # place, so the main loop can read it lock-free (atomic rebind under the GIL)
+    # without risking "set changed size during iteration".
+    # "targets" is seeded from the JSONL feed so the count survives restarts
+    # (see _seed_crispr_targets) and then grows as the thread scores more.
+    _crispr_stats: dict = {
+        "life_earned": 0.0,
+        "molecules_screened": 0,
+        "targets": _seed_crispr_targets(),
+    }
+    if _crispr_stats["targets"]:
+        log.info(
+            f"[CRISPR] Seeded {len(_crispr_stats['targets'])} contributed target(s) "
+            "from life_boltz_scores.jsonl"
+        )
     if _CRISPR_AVAILABLE:
         def _crispr_loop():
             """Score CRISPR targets continuously in a background daemon thread.
@@ -2307,6 +2380,14 @@ def main():
                     boltz_result = best_boltz_result
 
                     hit = affinity <= thresh
+
+                    # Mark this CRISPR target as actively worked on. Done here —
+                    # immediately after a real scored candidate — not inside the
+                    # submission branch below, so the ACTIVE TARGETS panel shows
+                    # CRISPR activity even when submission is gated by the epoch
+                    # cap, dedup window, delivery floor or quality threshold.
+                    _crispr_stats["targets"] = _crispr_stats["targets"] | {tid}
+
                     log.info(
                         f"[CRISPR] {tid} | gRNA: {grna_seq} | "
                         f"aff={affinity:.4f} | model={boltz_model} | epoch={current_epoch} | "
@@ -2392,9 +2473,12 @@ def main():
                                 f"{_epoch_submissions}/{CRISPR_MAX_SUBMISSIONS_PER_EPOCH} "
                                 "CRISPR submissions used"
                             )
-                            # CRISPR targets are all tier Crispr = 7 LIFE initial reward.
-                            # Supply/hit halvings are applied on-chain by mint_reward.rs.
-                            # Similarity decay applied live (Hamming-proxy parent).
+                            # CRISPR targets are all tier Crispr = 0.252 LIFE flat reward.
+                            # No halving: rewards are flat forever.  The on-chain
+                            # per-target hit-count taper (Layer 2) is applied by
+                            # mint_reward.rs and may reduce the final amount.
+                            # Similarity decay applied live (Hamming-proxy parent) —
+                            # this still applies proportionally on top of the new base.
                             # generate / zinc15 / ref are completely unaffected.
                             _crispr_life = _apply_crispr_decay(
                                 log, tid, grna_seq, REWARD_CRISPR_LIFE
@@ -2436,9 +2520,11 @@ def main():
         threading.Thread(target=_crispr_loop, daemon=True, name="crispr-grna").start()
         log.info(f"[CRISPR] Background gRNA thread started ({len(_CRISPR_TARGETS)} CRISPR targets)")
         log.info(
-            f"[TOKENOMICS] Rewards — Easy: {REWARD_EASY_LIFE} | Medium: {REWARD_MEDIUM_LIFE} | "
-            f"Hard: {REWARD_HARD_LIFE} | CRISPR: {REWARD_CRISPR_LIFE} | mRNA: {REWARD_MRNA_LIFE} $LIFE "
-            f"(halves every {HALVING_INTERVAL:,} epochs, ~1 yr on mainnet)"
+            f"[TOKENOMICS] Flat rewards — Easy: {REWARD_EASY_LIFE} | "
+            f"Medium: {REWARD_MEDIUM_LIFE} | Hard: {REWARD_HARD_LIFE} | "
+            f"CRISPR: {REWARD_CRISPR_LIFE} | mRNA: {REWARD_MRNA_LIFE} | "
+            f"Ref: {REWARD_REFERENCE_LIFE} $LIFE "
+            "(flat forever — no halving, no supply cap)"
         )
     else:
         log.warning("[CRISPR] life_crispr unavailable — CRISPR scoring disabled")
@@ -2446,7 +2532,7 @@ def main():
     stats = {
         "alive": True,
         "current_target": "",
-        "molecules_screened": 0, "life_earned": 0.0,
+        "molecules_screened": 0, "life_earned": 0.0, "life_confirmed": 0.0,
         "targets_contributed": [], "transactions": [],
         "tools": {"available": _TOOLS_AVAILABLE},
         "global": {"total_miners": None, "molecules_screened": None, "targets_solved": None},
@@ -2500,6 +2586,67 @@ def main():
     protein_idx  = 0
     mrna_idx     = 0
     _mrna_budget = 0   # counts down remaining mRNA picks before next protein pick
+
+    # ── Confirmation poller thread ────────────────────────────────────────────
+    # Polls each pending resultSubmission PDA every 2 min.  When the on-chain
+    # status byte flips to Confirmed (variant 2), adds the tier reward to
+    # _confirmed_state["total"] → dashboard shows "life_confirmed" separately.
+    #
+    # ResultSubmission Borsh layout (see life_core.json IDL):
+    #   8  discriminator
+    #  32  miner
+    #   2  target_id
+    #   8  epoch
+    # 512  smiles
+    #   2  smiles_len
+    #   4  claimed_affinity
+    #   8  submitted_slot
+    # ---
+    # 576  status (u8 enum: 0=Pending 1=Validating 2=Confirmed 3=Rejected)
+    _STATUS_OFFSET    = 576
+    _STATUS_CONFIRMED = 2
+    _STATUS_REJECTED  = 3
+
+    def _confirm_poller():
+        import base64 as _b64
+        log.info("[CONFIRM] Confirmation poller started (interval=120s)")
+        while True:
+            time.sleep(120)
+            try:
+                with _confirm_lock:
+                    pending = [p for p in _pending_pdas if not p["confirmed"]]
+                for entry in pending:
+                    pda = entry["pda"]
+                    try:
+                        result = _rpc("getAccountInfo",
+                                      [pda, {"encoding": "base64", "commitment": "confirmed"}])
+                        if not isinstance(result, dict) or result.get("value") is None:
+                            continue
+                        raw = result["value"]["data"]
+                        data = _b64.b64decode(raw[0] if isinstance(raw, list) else raw)
+                        if len(data) < _STATUS_OFFSET + 1:
+                            continue
+                        sv = data[_STATUS_OFFSET]
+                        if sv == _STATUS_CONFIRMED:
+                            with _confirm_lock:
+                                entry["confirmed"] = True
+                                _confirmed_state["total"] += entry["tier_reward"]
+                                _confirmed_state["tx_confirmed"] += 1
+                            log.info(
+                                f"[CONFIRM] ✔ {pda[:16]}… confirmed "
+                                f"+{entry['tier_reward']} $LIFE "
+                                f"(total confirmed: {_confirmed_state['total']:.1f})"
+                            )
+                        elif sv == _STATUS_REJECTED:
+                            with _confirm_lock:
+                                entry["confirmed"] = "rejected"
+                            log.info(f"[CONFIRM] ✘ {pda[:16]}… rejected by validators")
+                    except Exception as _pe:
+                        log.debug(f"[CONFIRM] poll {pda}: {_pe}")
+            except Exception as _loop_err:
+                log.debug(f"[CONFIRM] poller loop error: {_loop_err}")
+
+    threading.Thread(target=_confirm_poller, daemon=True, name="confirm-poller").start()
 
     while True:
         now = time.time()
@@ -2688,13 +2835,30 @@ def main():
             if resp and resp.get("tx"):
                 tx_sig = resp["tx"]
                 # Tier-based reward tracking (mirrors Rust DifficultyTier::base_reward_raw):
-                #   ref compound    =   3 LIFE (flat, any tier)
-                #   tier 1 (easy)   =   1 LIFE
-                #   tier 2 (medium) =   5 LIFE
-                #   tier 3 (hard)   =  25 LIFE
-                #   unknown         =   1 LIFE (conservative fallback)
-                _tier_reward = 3.0 if is_ref else {1: 1.0, 2: 5.0, 3: 25.0}.get(target.get("difficulty_tier", 1), 1.0)
+                #   ref compound    = 0.108 LIFE (flat, any tier)
+                #   tier 1 (easy)   = 0.3   LIFE
+                #   tier 2 (medium) = 0.7   LIFE
+                #   tier 3 (hard)   = 0.9   LIFE
+                #   unknown         = 0.3   LIFE (conservative fallback)
+                # Values come from the module-level constants so this can never
+                # drift from constants.rs.  This is the PRE-taper base reward;
+                # the on-chain hit-count taper (Layer 2) may reduce the actual
+                # minted amount, so treat this as an upper bound.
+                _tier_reward = (
+                    REWARD_REFERENCE_LIFE if is_ref
+                    else TIER_REWARD_LIFE.get(
+                        target.get("difficulty_tier", 1), REWARD_EASY_LIFE
+                    )
+                )
                 life_earned += _tier_reward
+                # Register PDA for async confirmation polling
+                _result_pda = resp.get("resultPda")
+                if _result_pda:
+                    with _confirm_lock:
+                        _pending_pdas.append({
+                            "pda": _result_pda, "tier_reward": _tier_reward,
+                            "confirmed": False, "ts": datetime.now(timezone.utc).isoformat(),
+                        })
                 log.info(f"  ✔ tx: {tx_sig}")
                 log.info(f"  Explorer: https://explorer.solana.com/tx/{tx_sig}?cluster=devnet")
                 # ── Reward-decay similarity logging (LOG ONLY — no payout change) ──
@@ -2709,7 +2873,12 @@ def main():
                              "boltz_score": boltz_score,
                              "chembl_novel": chembl_result.get("is_novel"),
                              "chembl_sim":   chembl_result.get("similarity"),
-                             "ts": datetime.now(timezone.utc).isoformat()})
+                             "ts": datetime.now(timezone.utc).isoformat(),
+                             "result_pda":   resp.get("resultPda"),
+                             "tier_reward":  _tier_reward,
+                             "confirmed":    False})
+                with _confirm_lock:
+                    _confirmed_state["tx_submitted"] += 1
                 # ── Update results database ───────────────────────────────────
                 try:
                     import importlib.util as _ilu
@@ -2765,14 +2934,19 @@ def main():
             "alive": True,
             "current_target": tid,
             "molecules_screened": molecules_done + _crispr_stats["molecules_screened"],
-            "life_earned": life_earned + _crispr_stats["life_earned"],
-            "targets_contributed": list({t["target"] for t in txs}),
+            "life_earned":    life_earned + _crispr_stats["life_earned"],
+            "life_confirmed": _confirmed_state["total"],
+            "tx_submitted":   _confirmed_state["tx_submitted"],
+            "tx_confirmed":   _confirmed_state["tx_confirmed"],
+            "targets_contributed": sorted(
+                {t["target"] for t in txs} | set(_crispr_stats["targets"])
+            ),
             "transactions": txs[-20:],
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "global": fetch_network_stats(),
         })
         write_stats(stats)
-        log.info(f"Screened: {molecules_done} | $LIFE: {life_earned + _crispr_stats['life_earned']:.1f} | txs: {len(txs)}")
+        log.info(f"Screened: {molecules_done} | $LIFE submitted: {life_earned + _crispr_stats['life_earned']:.1f} confirmed: {_confirmed_state['total']:.1f} | txs: {len(txs)}")
         log.info(f"Sleeping {POLL_SECONDS}s...")
         time.sleep(POLL_SECONDS)
 

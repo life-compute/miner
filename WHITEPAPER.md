@@ -28,9 +28,8 @@ LIFE Compute addresses two urgent problems simultaneously: the computational bot
 3. [The $LIFE Token](#3-the-life-token)
    - 3.1 Token Economics
    - 3.2 Mining Rewards
-   - 3.3 Halving Mechanism
+   - 3.3 Per-Target Maturity Taper
    - 3.4 Why This Model Works
-   - 3.5 Two-Layer Halving Schedule
 4. [Cancer Target Portfolio](#4-cancer-target-portfolio)
 5. [Technical Architecture](#5-technical-architecture)
 6. [Getting Started — Three Steps](#6-getting-started--three-steps)
@@ -71,7 +70,7 @@ LIFE Compute solves both problems with a single, elegant mechanism: reward GPU o
 3. Boltz2 runs locally on the miner's GPU, scoring molecule candidates against the target protein
 4. High-affinity molecule candidates are submitted to the Solana program
 5. Validators verify the Boltz2 scores are genuine
-6. $LIFE tokens are minted directly to the miner's wallet — subject to the halving schedule
+6. $LIFE tokens are minted directly to the miner's wallet — a flat amount set by target difficulty
 7. Results are stored publicly on-chain and in the `life-compute/targets` repository
 
 ### 2.2 Scientific Validity
@@ -90,66 +89,61 @@ $LIFE is a **proof-of-useful-work** cryptocurrency. It cannot be purchased in an
 
 | Property | Value |
 |----------|-------|
-| Total Supply | 21,000,000 $LIFE — fixed forever |
+| Total Supply | **Uncapped** — a live figure: total minted minus total burned |
+| Emission | Flat per-tier rewards; no halving, no schedule |
 | Pre-mine | Zero |
 | Team Allocation | Zero |
 | Investor Allocation | Zero |
 | Blockchain | Solana |
-| Token Standard | SPL Token |
+| Token Standard | SPL Token (freely transferable) |
+
+> There is no ceiling on $LIFE. There is only the work. Every token in existence is proof that a real computation happened — a real GPU, a real target, a real independently-verified result. Supply does not stop at a number. It stops when there is nothing left to discover.
+
+**Total supply is defined, at every moment, as total minted minus total burned.**
+It is a live, running figure — not a historical total and not a target. It rises
+only when real work is verified and mints new $LIFE through the program's
+official reward-payout path, at a flat rate with no time-based reduction. There
+is no fixed cap and no artificial ceiling.
+
+> $LIFE can only ever be created by real, verified work — running inference against real cancer targets, independently confirmed by a second machine. There is no other way for new $LIFE to come into existence. Once earned, it can be freely held or traded — but no one can ever buy their way into being the one who discovered it.
+
+$LIFE is earn-only **at the source**. The mint authority is a program-derived
+address; the only instruction that can create new tokens is the reward payout
+triggered by an independently confirmed result. Once earned, $LIFE is an
+ordinary SPL token: no transfer hook, no burn-on-transfer, no restriction on
+trading. A miner may hold or sell freely on any Solana DEX. A non-miner can only
+ever obtain $LIFE by buying it from someone who actually earned it — never by
+earning it without doing the work, and never through any other minting path. The
+market redistributes already-earned tokens; it never creates new supply.
 
 ### 3.2 Mining Rewards
 
-Rewards scale with the scientific difficulty of the target, incentivizing miners to focus compute on the hardest, most important problems. All rewards are subject to the two-layer halving schedule (see Section 3.3):
+Rewards scale with the scientific difficulty of the target, incentivizing miners to focus compute on the hardest, most important problems. Rates are **flat** — they do not decrease over time or with cumulative supply:
 
-| Difficulty | Base Reward | Description |
+| Difficulty | Reward | Description |
 |-----------|--------|-------------|
-| Easy | 1 $LIFE | Well-characterized binding pocket |
-| Medium | 5 $LIFE | Partial structural data available |
-| Hard | 25 $LIFE | Novel, poorly characterized target |
+| Easy | 0.3 $LIFE | Well-characterized binding pocket |
+| Medium | 0.7 $LIFE | Partial structural data available |
+| Hard | 0.9 $LIFE | Novel, poorly characterized target |
+| mRNA silencing | 0.9 $LIFE | Always Hard tier |
+| CRISPR gRNA | 0.252 $LIFE | Knockout targets (CPU-scored) |
+| Reference compound | 0.108 $LIFE | Known-binder control |
 | Discovery Bonus | 100 $LIFE | Top affinity score for a target that week |
 
-### 3.3 Halving Mechanism
+These rates were set from production measurement: at realistic multi-miner scale
+(~2,000 miners submitting three results per epoch) the earlier 25/5/1 scale
+emitted roughly 157,500 $LIFE per epoch — an unsustainable rate. The Hard tier
+was reduced to 0.9 $LIFE and every other tier scaled to preserve relativities.
+CRISPR is held below Hard because it is CPU-scored and must not out-price full
+GPU inference work.
 
-LIFE Compute uses a two-layer halving mechanism to ensure long-term token scarcity and to distribute rewards fairly as targets mature. Both multipliers apply simultaneously to every reward calculation.
+### 3.3 Per-Target Maturity Taper
 
-**Layer 1 — Supply Milestones** (based on total $LIFE minted network-wide):
-
-- **0 – 5,250,000 $LIFE minted:** 100% of base reward
-- **5,250,001 – 10,500,000 $LIFE minted:** 50% of base reward
-- **10,500,001 – 15,750,000 $LIFE minted:** 25% of base reward
-- **15,750,001 – 21,000,000 $LIFE minted:** 12.5% of base reward
-
-**Layer 2 — Target Hit Count** (based on confirmed submissions per individual target):
-
-- **0 – 99 verified hits:** 100% of tier reward
-- **100 – 999 verified hits:** 75% of tier reward
-- **1,000+ verified hits:** 50% of tier reward
-
-**Both multipliers apply together.** Example: a Hard target (25 $LIFE base) at supply milestone 2 (50%) with 150 verified hits (75%):
-> 25 × 0.50 × 0.75 = **9.375 $LIFE per confirmed hit**
-
-Early miners on fresh targets earn the most. As a target is well-explored and the network matures, rewards reduce naturally — mirroring how scientific value concentrates at the frontier.
-
-### 3.4 Why This Model Works
-
-Every $LIFE token represents real scientific work. As the total supply is distributed over time, each token becomes a permanent record of humanity's collective contribution to cancer research. The fixed supply creates natural scarcity as harder targets are solved, while the discovery bonus creates intense competition for breakthrough findings.
-
-Unlike proof-of-work mining where difficulty increases arbitrarily, LIFE Compute's difficulty is intrinsic — it reflects the genuine scientific challenge of finding high-affinity molecules for specific cancer proteins. The network gets harder to mine in exactly the ways that advance science.
-
-### 3.5 Two-Layer Halving Schedule
-
-LIFE Compute uses a two-layer halving mechanism to ensure long-term token scarcity and to distribute rewards fairly as targets mature. Both multipliers apply simultaneously.
-
-**Layer 1 — Supply Milestones** (based on total $LIFE minted network-wide):
-
-| LIFE Mined (Cumulative) | Reward Multiplier |
-|------------------------|-------------------|
-| 0 – 5,250,000 LIFE | 100% of base reward |
-| 5,250,001 – 10,500,000 LIFE | 50% of base reward |
-| 10,500,001 – 15,750,000 LIFE | 25% of base reward |
-| 15,750,001 – 21,000,000 LIFE | 12.5% of base reward |
-
-**Layer 2 — Target Hit Count** (based on confirmed submissions per individual target):
+There is no halving. The only reduction applied to a reward is a **per-target
+maturity taper**, and it is not a monetary schedule — it reflects diminishing
+scientific return. The thousandth confirmed hit on a target narrows the search
+far less than the first, so the reward tapers with how well-explored that
+specific target already is:
 
 | Verified Hits on Target | Reward Multiplier |
 |------------------------|-------------------|
@@ -157,10 +151,26 @@ LIFE Compute uses a two-layer halving mechanism to ensure long-term token scarci
 | 100 – 999 hits | 75% of tier reward |
 | 1,000+ hits | 50% of tier reward |
 
-**Combined example:** A Hard target (25 $LIFE base) at supply milestone 2 (50%) with 150 verified hits (75%):
-> 25 × 0.50 × 0.75 = **9.375 $LIFE per confirmed hit**
+**Example:** A Hard target (0.9 $LIFE) with 150 verified hits:
+> 0.9 × 0.75 = **0.675 $LIFE per confirmed hit**
 
-This design means early miners on fresh targets earn the most, creating a competitive incentive to discover binding molecules for newly added cancer proteins. As a target is well-explored and the network matures, rewards reduce naturally — mirroring how scientific value concentrates at the frontier.
+Early miners on fresh targets earn the most. As a target is well-explored,
+rewards taper naturally — mirroring how scientific value concentrates at the
+frontier. This taper is a property of the science, not of the token.
+
+### 3.4 Why This Model Works
+
+Every $LIFE token represents real scientific work. Each token is a permanent
+record of a computation that actually ran and was independently confirmed.
+Because supply is uncapped, the token's meaning does not come from scarcity —
+it comes from provenance. There is no number at which discovery is declared
+finished.
+
+> This does not mean $LIFE cures disease. It means $LIFE only exists where real computational science — narrowing the search for what might — has genuinely happened.
+
+Unlike proof-of-work mining where difficulty increases arbitrarily, LIFE Compute's difficulty is intrinsic — it reflects the genuine scientific challenge of finding high-affinity molecules for specific cancer proteins. The network gets harder to mine in exactly the ways that advance science.
+
+This design means early miners on fresh targets earn the most, creating a competitive incentive to discover binding molecules for newly added cancer proteins. As a target is well-explored and the network matures, rewards taper naturally — mirroring how scientific value concentrates at the frontier.
 
 ---
 
@@ -168,7 +178,7 @@ This design means early miners on fresh targets earn the most, creating a compet
 
 LIFE Compute launches with **30** validated cancer protein targets, curated from the most clinically significant and computationally tractable proteins in the oncology literature. Targets are organized into three reward tiers based on structural complexity, mutation heterogeneity, and the difficulty of finding high-affinity candidates.
 
-### Hard Tier — 25 $LIFE per hit
+### Hard Tier — 0.9 $LIFE per hit
 
 Targets with novel or poorly characterized binding pockets, high mutation heterogeneity, or historically deemed "undruggable." These represent the frontier of computational drug discovery.
 
@@ -186,7 +196,7 @@ Targets with novel or poorly characterized binding pockets, high mutation hetero
 | **SMAD4** | Q13485 | Pancreatic/Colorectal | TGF-β pathway mediator; lost in 55% of pancreatic cancers |
 | **APC** | P25054 | Colorectal | Gatekeeper tumor suppressor; mutated in 80% of colorectal cancers |
 
-### Medium Tier — 5 $LIFE per hit
+### Medium Tier — 0.7 $LIFE per hit
 
 Targets with partial structural data and validated drug candidates, offering meaningful scientific value with tractable binding pockets.
 
@@ -209,7 +219,7 @@ Targets with partial structural data and validated drug candidates, offering mea
 | **HDAC2** | Q92769 | Hematologic | Class I HDAC; pan-HDAC inhibitor target in hematologic cancers |
 | **ABL1** | P00519 | CML | BCR-ABL fusion in 95% of CML; imatinib/dasatinib target |
 
-### Easy Tier — 1 $LIFE per hit
+### Easy Tier — 0.3 $LIFE per hit
 
 Well-characterized targets with known binding pockets and approved small-molecule drugs. Ideal for new miners calibrating their setup.
 
@@ -227,7 +237,7 @@ Well-characterized targets with known binding pockets and approved small-molecul
 
 The LIFE Compute smart contract is written in Rust using the Anchor framework and deployed on Solana. The program manages six state accounts:
 
-- `NetworkConfig` — global configuration, total $LIFE minted, epoch parameters, halving state
+- `NetworkConfig` — global configuration, total $LIFE minted (live running figure), epoch parameters
 - `TargetAccount` — per-protein target data, current best score, weekly winner, confirmed hit count
 - `MinerAccount` — per-miner statistics, total $LIFE earned, submission history
 - `JobAccount` — active job assignments linking miners to targets
@@ -236,7 +246,7 @@ The LIFE Compute smart contract is written in Rust using the Anchor framework an
 
 Nine on-chain instructions handle the full lifecycle: `initialize`, `register_miner`, `register_validator`, `assign_job`, `submit_result`, `validate_result`, `mint_reward`, `claim_discovery_bonus`, and `update_target`.
 
-The `mint_reward` instruction applies the two-layer halving schedule automatically: reward = base × supply_multiplier × hit_multiplier (see Section 3.3).
+The `mint_reward` instruction computes the payout automatically: reward = flat_tier_reward × hit_count_multiplier (see Section 3.3). There is no supply cap and no halving — the only reduction is the per-target maturity taper.
 
 **Program ID:** `3dYbT2egotmpGBoLZe2pytsraffxre7V5dySsTKgxYiC`
 
