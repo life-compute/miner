@@ -1915,18 +1915,27 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
             wlog.debug(f"JSONL write failed: {_je}")
 
         # Update per-GPU shared stats key
-        # Reward policy:
-        #   ref compounds  → submit on hit, flat 3 $LIFE (logged as [REF-SUBMIT])
-        #   novel molecules → full tier rewards: Easy=1, Medium=5, Hard=25 $LIFE
-        # The on-chain program determines actual reward; local tracking mirrors it.
+        # Reward policy (flat — mirrors constants.rs; no halving, no supply cap):
+        #   ref compounds   → submit on hit, flat 0.108 $LIFE (logged as [REF-SUBMIT])
+        #   novel molecules → tier rewards: Easy=0.3, Medium=0.7, Hard=0.9 $LIFE
+        # The on-chain program determines the actual reward (and applies the
+        # per-target hit-count taper); local tracking mirrors the pre-taper base.
         life_delta = 0.0
         if hit and affinity is not None and TARGET_ID_MAP.get(tid) is not None:
             if is_ref:
-                wlog.info("  [REF-SUBMIT] HIT (reference compound) — submitting on-chain (flat 3 $LIFE)")
+                wlog.info(
+                    f"  [REF-SUBMIT] HIT (reference compound) — submitting on-chain "
+                    f"(flat {REWARD_REFERENCE_LIFE} $LIFE)"
+                )
             resp = submit_on_chain(TARGET_ID_MAP[tid], mol, affinity, boltz_seed_used)
             if resp and resp.get("status") == "submitted":
                 tx_sig = resp.get("signature", "")
-                life_delta = 3.0 if is_ref else {1: 1.0, 2: 5.0, 3: 25.0}.get(target.get("difficulty_tier", 1), 1.0)
+                life_delta = (
+                    REWARD_REFERENCE_LIFE if is_ref
+                    else TIER_REWARD_LIFE.get(
+                        target.get("difficulty_tier", 1), REWARD_EASY_LIFE
+                    )
+                )
                 wlog.info(f"  ✔ tx: {tx_sig}")
                 # ── Reward-decay similarity logging (LOG ONLY — no payout change) ──
                 if source in ("generate", "mutant", "crispr_generated") and not is_ref:
