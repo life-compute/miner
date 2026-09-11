@@ -2819,14 +2819,18 @@ def main():
                     log.debug(f"[PULSE] record_boltz failed (non-fatal): {_pbe}")
 
         # ── On-chain submission ───────────────────────────────────────────────
-        # Reward policy:
-        #   ref compounds  → submit on hit, flat 3 $LIFE (logged as [REF-SUBMIT])
-        #   novel molecules → full tier rewards: Easy=1, Medium=5, Hard=25 $LIFE
-        # The on-chain program determines actual reward; local tracking mirrors it.
+        # Reward policy (flat — mirrors constants.rs; no halving, no supply cap):
+        #   ref compounds   → submit on hit, flat 0.108 $LIFE (logged as [REF-SUBMIT])
+        #   novel molecules → tier rewards: Easy=0.3, Medium=0.7, Hard=0.9 $LIFE
+        # The on-chain program determines the actual reward (and applies the
+        # per-target hit-count taper); local tracking mirrors the pre-taper base.
         tx_sig = None
         if hit and affinity is not None and tid in TARGET_ID_MAP:
             if is_ref:
-                log.info("  [REF-SUBMIT] HIT (reference compound) — submitting on-chain (flat 3 $LIFE)")
+                log.info(
+                    f"  [REF-SUBMIT] HIT (reference compound) — submitting on-chain "
+                    f"(flat {REWARD_REFERENCE_LIFE} $LIFE)"
+                )
             else:
                 log.info(f"  HIT — submitting to devnet program {PROGRAM_ID}...")
             # ChEMBL novelty cross-reference (non-fatal, novel molecules only)
