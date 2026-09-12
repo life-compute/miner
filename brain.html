@@ -4,6 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LIFE-BRAIN — The Network's Living Memory · LIFE Compute</title>
+  <link rel="icon" href="assets/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="256x256" href="assets/life-coin-256.png" />
+  <link rel="apple-touch-icon" href="assets/life-coin-256.png" />
+  <meta property="og:title" content="LIFE-BRAIN — The Network's Living Memory" />
+  <meta property="og:description" content="Network-wide self-learning across every miner's confirmed on-chain submissions." />
+  <meta property="og:image" content="assets/life-coin-og.png" />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="assets/life-coin-og.png" />
   <style>
     :root {
       --bg:          #060608;
@@ -37,8 +46,17 @@
       background: rgba(6,6,8,0.92);
       backdrop-filter: blur(12px);
     }
-    .logo { font-family: var(--font-mono); font-weight: 700; font-size: 1.1rem; color: var(--green); letter-spacing: 0.05em; }
+    .logo { font-family: var(--font-mono); font-weight: 700; font-size: 1.1rem; color: var(--green); letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.6rem; }
     .logo span { color: var(--white); }
+    .logo-coin {
+      width: 30px; height: 30px; display: block; flex-shrink: 0;
+      filter: drop-shadow(0 0 5px rgba(0,255,136,0.45));
+      transition: filter 0.3s, transform 0.3s;
+    }
+    .logo:hover .logo-coin {
+      filter: drop-shadow(0 0 10px rgba(0,255,136,0.75));
+      transform: rotate(8deg);
+    }
     nav a { color: var(--muted); text-decoration: none; font-size: 0.875rem; margin-left: 1.5rem; transition: color 0.2s; }
     nav a:hover { color: var(--white); }
     nav a.active { color: var(--green); }
@@ -220,7 +238,7 @@
 <body>
 
 <nav>
-  <div class="logo"><a href="index.html" style="text-decoration:none;color:inherit">LIFE<span>.compute</span></a></div>
+  <div class="logo"><a href="index.html" style="text-decoration:none;color:inherit;display:flex;align-items:center;gap:0.6rem"><img class="logo-coin" src="assets/life-coin-128.png" alt="LIFE Compute coin" />LIFE<span>.compute</span></a></div>
   <div>
     <a href="index.html#install">Install</a>
     <a href="index.html#how">How it works</a>

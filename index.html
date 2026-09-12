@@ -4,6 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LIFE Compute — Your GPU could help cure cancer</title>
+  <link rel="icon" href="assets/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="256x256" href="assets/life-coin-256.png" />
+  <link rel="apple-touch-icon" href="assets/life-coin-256.png" />
+  <meta property="og:title" content="LIFE Compute — Your GPU could help cure cancer" />
+  <meta property="og:description" content="A decentralised network where anyone with a GPU can contribute to cancer drug discovery — and get paid in $LIFE." />
+  <meta property="og:image" content="assets/life-coin-og.png" />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="assets/life-coin-og.png" />
   <style>
     :root {
       --bg:       #060608;
@@ -36,8 +45,17 @@
       background: rgba(6,6,8,0.92);
       backdrop-filter: blur(12px);
     }
-    .logo { font-family: var(--font); font-weight: 700; font-size: 1.1rem; color: var(--green); letter-spacing: 0.05em; }
+    .logo { font-family: var(--font); font-weight: 700; font-size: 1.1rem; color: var(--green); letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.6rem; }
     .logo span { color: var(--white); }
+    .logo-coin {
+      width: 30px; height: 30px; display: block; flex-shrink: 0;
+      filter: drop-shadow(0 0 5px rgba(0,255,136,0.45));
+      transition: filter 0.3s, transform 0.3s;
+    }
+    .logo:hover .logo-coin {
+      filter: drop-shadow(0 0 10px rgba(0,255,136,0.75));
+      transform: rotate(8deg);
+    }
     nav a { color: var(--muted); text-decoration: none; font-size: 0.875rem; margin-left: 1.5rem; transition: color 0.2s; }
     nav a:hover { color: var(--white); }
 
@@ -53,6 +71,20 @@
       position: absolute; inset: 0;
       background: radial-gradient(ellipse 80% 50% at 50% 0%, rgba(0,255,136,0.07) 0%, transparent 70%);
       pointer-events: none;
+    }
+    .hero-coin {
+      width: min(230px, 48vw); height: auto; display: block;
+      margin: 0 auto 2rem;
+      filter: drop-shadow(0 0 34px rgba(0,255,136,0.30))
+              drop-shadow(0 0 70px rgba(120,80,255,0.20));
+      animation: coin-float 6s ease-in-out infinite;
+    }
+    @keyframes coin-float {
+      0%,100% { transform: translateY(0) rotate(-1.2deg); }
+      50%     { transform: translateY(-12px) rotate(1.2deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .hero-coin { animation: none; }
     }
     .badge {
       display: inline-block;
@@ -186,7 +218,7 @@
 <body>
 
 <nav>
-  <div class="logo">LIFE<span>.compute</span></div>
+  <div class="logo"><img class="logo-coin" src="assets/life-coin-128.png" alt="LIFE Compute coin" />LIFE<span>.compute</span></div>
   <div>
     <a href="#install">Install</a>
     <a href="#how">How it works</a>
@@ -198,6 +230,7 @@
 
 <!-- ── Hero ─────────────────────────────────────────── -->
 <div class="hero">
+  <img class="hero-coin" src="assets/life-coin-512.png" alt="LIFE Compute — DNA helix coin" />
   <div class="badge">Now live on Solana Devnet</div>
   <h1>Your GPU could help<br><em>cure cancer.</em><br>Earn $LIFE tokens.</h1>
   <p class="subtitle">
