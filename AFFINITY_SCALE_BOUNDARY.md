@@ -127,13 +127,21 @@ and **were not corrected**:
 | `discoveries.json` registry | `scripts/mint_discovery_nft.js:387,391` | Yes (local file) |
 | Dashboard `kcal/mol` label | `dashboard/src/App.jsx:1772` | Yes |
 | Dashboard `AFF(kcal)` column | `dashboard/src/App.jsx:504,556` | Yes |
-| Public "ΔG kcal/mol" claim | `index.html:286` | Yes |
+| Public "ΔG kcal/mol" claim | ~~`index.html:286`~~ — see note below | Resolved (removed) |
 | Public leaderboard `best_score` | `update_results_db.py:93,102,136,148` | Yes |
 | LIFE-BRAIN training labels | `adaptive/life_brain_ingest.py:151,169` | Yes (retrainable) |
 
 **The NFT traits cannot be retroactively corrected.** The registry therefore
 contains two eras of differently-derived values under one trait name, split at
 slot 497232432.
+
+> **Note on the "Public ΔG kcal/mol claim" row (2026-09-12).** That citation
+> pointed at `index.html` in *this* repo — a stale duplicate of the marketing
+> site that was never served. The live site is
+> [`life-compute/life-compute.github.io`](https://github.com/life-compute/life-compute.github.io)
+> (`lifecompute.ai`), and it contains **no** `kcal`/`ΔG` claim on any page.
+> The incorrect public claim therefore never reached users. The duplicate was
+> deleted; no live copy required correction.
 
 The open decision — deliberately deferred on 2026-09-12, not yet made:
 
