@@ -975,15 +975,18 @@ _BOLTZ_HELPER = """\
 import sys, json
 sys.path.insert(0, "{nova_dir}")
 
-from nova_adaptive.nova_pulse_scorer import score_batch
+from nova_adaptive.nova_pulse_scorer import score_batch_detailed
 
 args      = json.loads(sys.argv[1])
-scores    = score_batch([args["smiles"]], args["target_id"],
-                        args["sequence"], args["msa_path"])
-boltz_score = scores.get(args["smiles"])
+scores    = score_batch_detailed([args["smiles"]], args["target_id"],
+                                 args["sequence"], args["msa_path"])
+detail      = scores.get(args["smiles"]) or {{}}
+boltz_score = detail.get("boltz_score")
 
 print(json.dumps({{
     "boltz_score": boltz_score,
+    "affinity_pred_value":         detail.get("affinity_pred_value"),
+    "affinity_probability_binary": detail.get("affinity_probability_binary"),
     "smiles":      args["smiles"],
     "target_id":   args["target_id"],
     "msa_path":    args["msa_path"],
@@ -1061,11 +1064,39 @@ def run_boltz2_scoring(smiles: str, target: dict) -> dict:
     log.warning(f"  Boltz2 stdout unparseable: {r.stdout[-200:]}")
     return {"boltz_score": None, "model": "boltz2-gpu", "msa_used": msa_path}
 
-def _boltz_score_to_affinity(boltz_score) -> float | None:
-    """Higher boltz_score = better binder → negate+scale to kcal/mol-like."""
-    if boltz_score is None:
+# RT*ln(10) at 298.15 K, in kcal/mol: 0.001987204259 * 298.15 * ln(10).
+# Converts a base-10 log concentration into a binding free energy.
+_RT_LN10_KCAL = 1.364247
+
+# SCALE BOUNDARY: protein affinity derivation changed at on-chain slot 497232432
+# (2026-09-12 14:32:38 UTC, epoch 9002). Before that slot, affinity was
+# `-boltz_score * 30.0` -- not an energy. Values either side are NOT comparable.
+# Historical NFT `affinity_kcal_mol` traits predate this and cannot be corrected.
+# See AFFINITY_SCALE_BOUNDARY.md before migrating or retraining on old values.
+
+
+def _affinity_pred_value_to_dg(affinity_pred_value) -> float | None:
+    """Convert Boltz2 ``affinity_pred_value`` to binding free energy (kcal/mol).
+
+    ``affinity_pred_value`` is log10(IC50) with IC50 in **micromolar**
+    (Boltz-2 docs, prediction.md).  Hence::
+
+        IC50_molar = 10 ** (v - 6)
+        dG         = RT * ln(IC50_molar) = RT*ln(10) * (v - 6)
+
+    Returned unclamped: a non-negative dG means IC50 > 1 M, i.e. a genuine
+    non-binder, and must register as a MISS rather than be silently rescued.
+
+    Do NOT use ``boltz_score`` here.  boltz_score is
+    ``(affinity_probability_binary - affinity_pred_value) / heavy_atom_count``
+    -- a dimensionless Nova *ranking* statistic that subtracts a log
+    concentration from a probability.  It is valid for ordering candidates and
+    meaningless as an energy.  ``life_mrna_boltz.py`` bypasses the old
+    conversion for exactly this reason; the protein path previously did not.
+    """
+    if affinity_pred_value is None:
         return None
-    return round(-float(boltz_score) * 30.0, 3)
+    return round(_RT_LN10_KCAL * (float(affinity_pred_value) - 6.0), 3)
 
 
 # ── Boltz2 CRISPR ternary-complex scoring ────────────────────────────────────
@@ -1236,7 +1267,8 @@ def run_boltz2_mrna_scoring(smiles: str, target: dict) -> dict:
     Score: ipTM from confidence JSON (structure confidence, 0-1).
     Falls back gracefully if affinity JSON is present (Boltz2 RNA + ligand mode).
     Returns boltz_score = iptm, or None on failure.
-    The caller converts via _boltz_score_to_affinity(), same as the protein path.
+    The caller derives affinity from affinity_kcal (-6.0 - 3.0*iptm), NOT via
+    the protein path's affinity_pred_value -> dG conversion.
 
     Does NOT touch run_boltz2_scoring() or the protein/MSA path.
     """
@@ -1371,7 +1403,9 @@ def submit_on_chain(target_id_num: int, smiles: str, affinity: float,
     then seq=2 so each epoch can record up to 3 distinct results.
 
     molecule_type: "protein" | "mRNA" | "CRISPR"
-      - protein/mRNA: affinity is Boltz2 kcal/mol, boltz_seed identifies the run.
+      - protein/mRNA: affinity is a binding free energy in kcal/mol (protein:
+        RT*ln(10)*(affinity_pred_value - 6); mRNA: -6.0 - 3.0*iptm), and
+        boltz_seed identifies the run.
       - CRISPR: affinity is the combined three-score (on_target × off_target ×
         delivery), negated to satisfy the on-chain < 0.0 guard.  boltz_seed is
         0 (no GPU run).  The JS helper logs moleculeType so validators can route
@@ -1922,7 +1956,7 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
 
         boltz_score     = result.get("boltz_score")
         boltz_seed_used = result.get("seed", BOLTZ_SEED)
-        affinity        = _boltz_score_to_affinity(boltz_score)
+        affinity        = _affinity_pred_value_to_dg(result.get("affinity_pred_value"))
 
         if is_ref and affinity is not None:
             ref_scores[tid] = affinity
@@ -1954,12 +1988,19 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
         # per-target hit-count taper); local tracking mirrors the pre-taper base.
         life_delta = 0.0
         if hit and affinity is not None and TARGET_ID_MAP.get(tid) is not None:
-            if is_ref:
-                wlog.info(
-                    f"  [REF-SUBMIT] HIT (reference compound) — submitting on-chain "
-                    f"(flat {REWARD_REFERENCE_LIFE} $LIFE)"
+            resp = None
+            if affinity >= 0.0:
+                wlog.warning(
+                    f"  [SUBMIT-GUARD] {tid} affinity {affinity:+.3f} is not "
+                    f"negative — predicted non-binder, skipping submission"
                 )
-            resp = submit_on_chain(TARGET_ID_MAP[tid], mol, affinity, boltz_seed_used)
+            else:
+                if is_ref:
+                    wlog.info(
+                        f"  [REF-SUBMIT] HIT (reference compound) — submitting on-chain "
+                        f"(flat {REWARD_REFERENCE_LIFE} $LIFE)"
+                    )
+                resp = submit_on_chain(TARGET_ID_MAP[tid], mol, affinity, boltz_seed_used)
             if resp and resp.get("status") == "submitted":
                 tx_sig = resp.get("signature", "")
                 life_delta = (
@@ -2910,7 +2951,7 @@ def main():
         if is_mrna and result.get("affinity_kcal") is not None:
             affinity = result["affinity_kcal"]
         else:
-            affinity = _boltz_score_to_affinity(boltz_score)
+            affinity = _affinity_pred_value_to_dg(result.get("affinity_pred_value"))
 
         if is_ref and affinity is not None:
             ref_scores[tid] = affinity
@@ -2962,7 +3003,13 @@ def main():
         # The on-chain program determines the actual reward (and applies the
         # per-target hit-count taper); local tracking mirrors the pre-taper base.
         tx_sig = None
-        if hit and affinity is not None and tid in TARGET_ID_MAP:
+        if (hit and affinity is not None and tid in TARGET_ID_MAP
+                and affinity >= 0.0):
+            log.warning(
+                f"  [SUBMIT-GUARD] {tid} affinity {affinity:+.3f} is not negative "
+                f"— predicted non-binder, skipping on-chain submission"
+            )
+        elif hit and affinity is not None and tid in TARGET_ID_MAP:
             if is_ref:
                 log.info(
                     f"  [REF-SUBMIT] HIT (reference compound) — submitting on-chain "

@@ -26,7 +26,7 @@ Score source
       affinity_kcal = -6.0 - 3.0 × iptm   (range -6 to -9 kcal/mol-like)
 
   The caller (run_boltz2_mrna_scoring) always returns a ``boltz_score`` field
-  compatible with ``_boltz_score_to_affinity()`` in miner_daemon.py, or None on
+  reported directly as ``affinity_kcal`` (miner_daemon.py uses it as-is), or None on
   total failure.
 
 Threshold calibration
@@ -151,7 +151,7 @@ def parse_mrna_boltz_affinity(
                 boltz_score = float(v0) - float(v1)
                 # Always derive affinity_kcal from iptm, even when affinity JSON
                 # is present. The raw (v0-v1) combo is unbounded (can exceed 1.0)
-                # and must NOT be passed to _boltz_score_to_affinity(×30) in the
+                # and must NOT be passed to the protein dG conversion in the
                 # caller. iptm is always the bounded quality signal (0-1).
                 aff_kcal = round(-6.0 - 3.0 * float(iptm), 4) if iptm is not None else None
                 return {

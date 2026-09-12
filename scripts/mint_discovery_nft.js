@@ -137,6 +137,10 @@ function buildMoleculeMetadata(args) {
     { trait_type: 'target_name',        value: args.targetName },
     { trait_type: 'uniprot_id',         value: args.uniprotId },
     { trait_type: 'smiles',             value: args.smiles },
+    // SCALE BOUNDARY: only genuine kcal/mol for mints at/after on-chain slot
+    // 497232432 (2026-09-12 14:32:38 UTC). Earlier mints carry `-boltz_score*30`,
+    // a dimensionless ranking statistic, under this same trait name -- and are
+    // immutable. See AFFINITY_SCALE_BOUNDARY.md in the miner repo.
     { trait_type: 'affinity_kcal_mol',  value: String(args.affinity) },
     { trait_type: 'discovery_rank',     value: String(args.discoveryRank) },
     { trait_type: 'discovery_number',   value: String(num) },
