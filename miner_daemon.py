@@ -161,6 +161,29 @@ except Exception as _crispr_err:
     crispr_score_grna          = None   # type: ignore[assignment]
     _CRISPR_HOTSPOT_GRNAS      = {}     # type: ignore[assignment]
 
+# ── pegRNA / prime editing ("Optimus Prime") — Stage 4, LOG-ONLY ──────────────
+# Additive fourth modality. Generation + Stage 2 scoring only: this branch never
+# submits on-chain, never touches reward/confirm state, and writes to its own
+# JSONL. Disable at runtime with PEG_ENABLED=0.
+try:
+    from adaptive.life_peg import (
+        design_candidates    as peg_design_candidates,
+        list_reference_genes as peg_list_genes,
+        load_gene_reference  as peg_load_gene,
+    )
+    from adaptive.life_peg_model import (
+        MODEL_PATH       as _PEG_MODEL_PATH,
+        rank_candidates  as peg_rank_candidates,
+    )
+    _PEG_AVAILABLE = True
+except Exception as _peg_err:
+    _PEG_AVAILABLE = False
+    peg_design_candidates = None   # type: ignore[assignment]
+    peg_list_genes        = None   # type: ignore[assignment]
+    peg_load_gene         = None   # type: ignore[assignment]
+    peg_rank_candidates   = None   # type: ignore[assignment]
+    _PEG_MODEL_PATH       = None   # type: ignore[assignment]
+
 # ── CRISPR-Net — per-target ML pre-screener ───────────────────────────────────
 try:
     from adaptive.life_crispr_net import (
@@ -303,6 +326,15 @@ DISCOVERY_NFT_JS     = WORK_DIR / "scripts" / "mint_discovery_nft.js"
 DISCOVERY_REGISTRY   = WORK_DIR / "output" / "discoveries.json"
 DISCOVERY_FOUNDATION = "2jVdMx7fb88txbG6YoZzC7kT4Tq8rJDaWrNgbZ3ZnqCb"
 DISCOVERY_PERCENTILE = 0.10   # top-10% affinity for that target qualifies
+
+# ── pegRNA / prime editing — Stage 4 (LOG-ONLY) ───────────────────────────────
+# Deliberately its own file: life_boltz_scores.jsonl feeds the dashboard and
+# _seed_crispr_targets(), and life_peg_scores.jsonl is the Stage 2 offline dump.
+# Daemon rows must not be mistaken for either.
+PEG_ENABLED        = os.getenv("PEG_ENABLED", "1") == "1"
+PEG_SWEEP_INTERVAL = int(os.getenv("PEG_SWEEP_INTERVAL", "1800"))  # 30 min/tick
+PEG_TOP_N          = int(os.getenv("PEG_TOP_N", "5"))
+PEG_SCORES_JSONL   = WORK_DIR / "output" / "life_peg_daemon_scores.jsonl"
 
 # ── Boltz2 / nova paths ───────────────────────────────────────────────────────
 NOVA_DIR   = Path("/mnt/minos-drive/nova_subnet")
@@ -2537,6 +2569,111 @@ def main():
         )
     else:
         log.warning("[CRISPR] life_crispr unavailable — CRISPR scoring disabled")
+
+    # ── pegRNA / prime editing — Stage 4, LOG-ONLY ────────────────────────────
+    # Fourth modality, additive. Mirrors _crispr_loop's isolation: its own
+    # daemon thread, outside the protein/mRNA scheduling queues, with per-tick
+    # non-fatal error handling.
+    #
+    # LOG-ONLY BY CONSTRUCTION. This block references no submission, reward,
+    # confirm, stats or NFT symbol — it cannot affect earnings even if it
+    # misbehaves. The worst failure mode is a noisy log line and a stale JSONL.
+    if _PEG_AVAILABLE and PEG_ENABLED:
+        def _peg_loop():
+            """Design + score pegRNA candidates, one hotspot per tick.
+
+            Cadence: one hotspot every PEG_SWEEP_INTERVAL (default 30 min), so a
+            full 28-hotspot pass takes ~14 h. Measured cost is ~2 s of CPU per
+            hotspot (28 hotspots = 56,080 candidates ≈ 37 s total), which is
+            negligible, but the slow rotation keeps it clear of the Boltz2 GPU
+            work and the ~2,000-target protein rotation.
+
+            Writes one JSONL row per top-N candidate to PEG_SCORES_JSONL. Nothing
+            is submitted on-chain: Stage 4 exists to accumulate real scoring data
+            while the validator side is still being built out.
+            """
+            # (gene, hotspot_label) pairs, fixed order so the rotation is
+            # reproducible across restarts.
+            hotspots: list[tuple[str, str]] = []
+            for _g in peg_list_genes():                        # type: ignore[misc]
+                _rec = peg_load_gene(_g) or {}                 # type: ignore[misc]
+                for _hs in _rec.get("hotspots", []):
+                    hotspots.append((_g, _hs["label"]))
+
+            if not hotspots:
+                log.warning("[PEG] No Stage 0.1 hotspots found — thread exiting")
+                return
+
+            # Pin the model artefact so a row can be traced to what produced it.
+            try:
+                import hashlib as _hashlib
+                _model_sha = _hashlib.sha256(
+                    Path(_PEG_MODEL_PATH).read_bytes()         # type: ignore[arg-type]
+                ).hexdigest()[:16]
+            except Exception:
+                _model_sha = "unknown"
+
+            log.info(
+                f"[PEG] Background pegRNA thread started — {len(hotspots)} hotspots, "
+                f"1 per {PEG_SWEEP_INTERVAL}s (~{len(hotspots) * PEG_SWEEP_INTERVAL / 3600:.1f}h "
+                f"per full pass), model={_model_sha} — LOG-ONLY, no on-chain submission"
+            )
+
+            _idx = 0
+            while True:
+                try:
+                    gene, label = hotspots[_idx % len(hotspots)]
+                    _idx += 1
+
+                    cands = peg_design_candidates(gene, label)   # type: ignore[misc]
+                    if not cands:
+                        log.info(f"[PEG] {gene}/{label} | no viable candidates")
+                        time.sleep(PEG_SWEEP_INTERVAL)
+                        continue
+
+                    ranked = peg_rank_candidates(cands, top=PEG_TOP_N)  # type: ignore[misc]
+                    if not ranked:
+                        log.info(f"[PEG] {gene}/{label} | {len(cands)} designed, none scored")
+                        time.sleep(PEG_SWEEP_INTERVAL)
+                        continue
+
+                    ts = time.time()
+                    PEG_SCORES_JSONL.parent.mkdir(parents=True, exist_ok=True)
+                    with PEG_SCORES_JSONL.open("a") as _fh:
+                        for _rank, (_cand, _score) in enumerate(ranked, start=1):
+                            _row = _cand.to_dict()
+                            _row.update({
+                                "ts": ts,
+                                "gene": gene,
+                                "hotspot_label": label,
+                                "predicted_efficiency": _score,
+                                "rank": _rank,
+                                "n_candidates": len(cands),
+                                "model_sha256": _model_sha,
+                                "source": "peg_daemon",
+                                "stage": 4,
+                                "submitted": False,
+                            })
+                            _fh.write(json.dumps(_row) + "\n")
+
+                    _best = ranked[0]
+                    log.info(
+                        f"[PEG] {gene}/{label} | {len(cands)} designed → top{len(ranked)} "
+                        f"| best eff={_best[1]:.4f} "
+                        f"(PBS {len(_best[0].pbs)}nt RTT {len(_best[0].rtt)}nt "
+                        f"strand {_best[0].strand}) | logged, not submitted"
+                    )
+
+                except Exception as _pe:
+                    log.warning(f"[PEG] thread error (non-fatal): {_pe}")
+
+                time.sleep(PEG_SWEEP_INTERVAL)
+
+        threading.Thread(target=_peg_loop, daemon=True, name="peg-rna").start()
+    elif not _PEG_AVAILABLE:
+        log.warning("[PEG] life_peg unavailable — pegRNA scoring disabled")
+    else:
+        log.info("[PEG] PEG_ENABLED=0 — pegRNA thread not started")
 
     stats = {
         "alive": True,
