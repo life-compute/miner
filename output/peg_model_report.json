@@ -1,0 +1,107 @@
+{
+ "label": "HEKaverageedited_clamped",
+ "n_rows": 22956,
+ "n_loci": 11953,
+ "n_features": 43,
+ "skipped": 0,
+ "metrics": {
+  "grouped_r2": 0.6853,
+  "grouped_spearman": 0.8363,
+  "random_r2": 0.6916,
+  "random_spearman": 0.8392,
+  "leakage_gap": 0.0063,
+  "beats_mean_baseline": true
+ },
+ "top_features": [
+  {
+   "name": "edit_substitution",
+   "importance": 0.2995
+  },
+  {
+   "name": "correction_len",
+   "importance": 0.16075
+  },
+  {
+   "name": "edit_to_rtt_end",
+   "importance": 0.1538
+  },
+  {
+   "name": "pbs_gc",
+   "importance": 0.05445
+  },
+  {
+   "name": "spacer_homopolymer",
+   "importance": 0.0524
+  },
+  {
+   "name": "spacer_gc",
+   "importance": 0.0517
+  },
+  {
+   "name": "pbs_tm",
+   "importance": 0.03653
+  },
+  {
+   "name": "spacer_tm",
+   "importance": 0.03462
+  },
+  {
+   "name": "rtt_t",
+   "importance": 0.03128
+  },
+  {
+   "name": "rtt_homopolymer",
+   "importance": 0.01899
+  },
+  {
+   "name": "pbs_t",
+   "importance": 0.01647
+  },
+  {
+   "name": "edit_deletion",
+   "importance": 0.01552
+  },
+  {
+   "name": "edit_rel_pos_in_rtt",
+   "importance": 0.01009
+  },
+  {
+   "name": "nick_to_edit",
+   "importance": 0.00989
+  },
+  {
+   "name": "ext_fold_energy",
+   "importance": 0.00722
+  },
+  {
+   "name": "rtt_gc",
+   "importance": 0.00581
+  },
+  {
+   "name": "rtt_len",
+   "importance": 0.00544
+  },
+  {
+   "name": "rtt_g",
+   "importance": 0.00443
+  },
+  {
+   "name": "rtt_pbs_ratio",
+   "importance": 0.00384
+  },
+  {
+   "name": "pbs_gc_clamp",
+   "importance": 0.00347
+  }
+ ],
+ "gbr_params": {
+  "n_estimators": 200,
+  "max_depth": 4,
+  "learning_rate": 0.05,
+  "subsample": 0.8,
+  "random_state": 42
+ },
+ "source": "PRIDICT2 data_23k_v1.csv (measured HEK293T/K562)",
+ "trained_at": 1789080754.4917715,
+ "caveat": "Trained on PRIDICT2 HEK293T/K562 library loci. Transfers pegRNA DESIGN rules (PBS/RTT length, GC, Tm, edit position); does not model our targets' chromatin context."
+}
