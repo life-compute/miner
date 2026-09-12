@@ -2348,6 +2348,17 @@ const CSS = `
   * { box-sizing: border-box; }
   body { margin: 0; background: #050a05; font-family: 'Courier New', monospace; }
   ::selection { background: #00ff4133; color: #00ff41; }
+  .life-coin-pulse {
+    filter: drop-shadow(0 0 6px rgba(0,255,65,0.55)) drop-shadow(0 0 16px rgba(255,105,180,0.25));
+    animation: life-coin-glow 4s ease-in-out infinite;
+  }
+  @keyframes life-coin-glow {
+    0%,100% { filter: drop-shadow(0 0 6px rgba(0,255,65,0.55)) drop-shadow(0 0 16px rgba(255,105,180,0.25)); }
+    50%     { filter: drop-shadow(0 0 13px rgba(0,255,65,0.85)) drop-shadow(0 0 28px rgba(255,105,180,0.45)); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .life-coin-pulse { animation: none; }
+  }
   @keyframes textPulse {
     0%, 100% { opacity: 1; }
     50%       { opacity: 0.85; }
@@ -2457,8 +2468,16 @@ export default function App() {
           {/* ── Header ── */}
           <header style={S.header}>
             <div style={S.headerInner}>
-              <div style={{ fontSize: '26px', fontWeight: 700, color: '#00ff41', fontFamily: T.mono, letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'center' }}>
-                LIFE COM<span style={{ color: '#ff69b4' }}>PUTE</span> — DECENTRALIZED DRUG DISCOVERY NETWORK
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                <img
+                  src="/life-coin-128.png"
+                  alt="LIFE Compute"
+                  className="life-coin-pulse"
+                  style={{ width: 54, height: 54, display: 'block', flexShrink: 0 }}
+                />
+                <div style={{ fontSize: '26px', fontWeight: 700, color: '#00ff41', fontFamily: T.mono, letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'center' }}>
+                  LIFE COM<span style={{ color: '#ff69b4' }}>PUTE</span> — DECENTRALIZED DRUG DISCOVERY NETWORK
+                </div>
               </div>
               <div style={{ fontSize: '13px', color: '#00aa28', fontFamily: T.mono, letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'center' }}>
                 POWERED BY BOLTZ2 MOLECULAR DOCKING · SOLANA BLOCKCHAIN
