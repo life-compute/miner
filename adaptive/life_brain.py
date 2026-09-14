@@ -213,9 +213,12 @@ def _fallback_mae_protein(held_target_id: int, held_rows: list[dict]) -> Optiona
         report = json.loads(_PNET_REPORT_PATH.read_text())
         # Report keys are gene names (e.g. "PDL1"); target_id is an int — map via _TARGET_NAME_MAP.
         gene_name = _TARGET_NAME_MAP.get(held_target_id, str(held_target_id))
-        uid = report.get("models", {}).get(gene_name, {}).get("uniprot_id", gene_name)
-        # pkl lives in the protein_models/ directory alongside the report, named <uid>_model.pkl.
-        pkl_path = _PNET_REPORT_PATH.parent / f"{uid}_model.pkl"
+        if gene_name not in report.get("models", {}):
+            return None
+        # pkl lives alongside the report, named <target_id>_model.pkl.  Keyed on
+        # target_id (not uniprot_id) since one accession spans the small-molecule,
+        # mRNA and CRISPR modalities of a gene — see life_proteinnet._model_path.
+        pkl_path = _PNET_REPORT_PATH.parent / f"{gene_name}_model.pkl"
         if not pkl_path.exists():
             return None
         with pkl_path.open("rb") as fh:

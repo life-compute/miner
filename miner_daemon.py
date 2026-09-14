@@ -1920,8 +1920,11 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
                 time.sleep(30)
                 continue
             ref_compounds = fetch_reference_compounds()
-            ref_scores.clear()
-            ref_last_screened.clear()
+            # Do NOT clear ref_scores / ref_last_screened here.  TARGET_REFRESH is
+            # 300s vs REF_RESCREEN_INTERVAL 14400s, so clearing made ref permanently
+            # due — the reference compound won the Priority-1 slot every pass and
+            # _pick_molecule never ran.  ref_scores backs eff_thresh and must
+            # likewise survive, or targets fall back to the default threshold.
             last_refresh = now
 
         _maybe_advance_epoch()
@@ -2848,8 +2851,13 @@ def main():
                 continue
             ref_compounds = fetch_reference_compounds()
             log.info(f"Reference compounds loaded: {len(ref_compounds)} ({', '.join(ref_compounds)})")
-            ref_scores.clear()
-            ref_last_screened.clear()  # reset timer so ref is scored on next iteration
+            # Do NOT clear ref_scores / ref_last_screened here.  TARGET_REFRESH is
+            # 300s vs REF_RESCREEN_INTERVAL 14400s, so clearing made `ref_due`
+            # permanently True: the reference compound won the Priority-1 slot every
+            # pass and _pick_molecule (ZINC15 / generation) never ran — 34 targets
+            # ended up ~100% ref rows with 1 unique SMILES each, which is what made
+            # ProteinNet R² a meaningless 1.0.  ref_scores backs eff_thresh and must
+            # likewise survive, or targets fall back to the default threshold.
             for t in targets:
                 uid  = t["uniprot_id"]
                 flag = "✓ MSA" if _msa_path_for(uid) != "empty" else "✗ no MSA (single-seq)"

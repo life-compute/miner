@@ -18,7 +18,9 @@ Architecture
 - Features: Morgan2048 fingerprint + 8 RDKit physico-chemical descriptors
   (MW, logP, HBD, HBA, TPSA, RotBonds, RingCount, HeavyAtoms) = 2056 dims
 - Model: GradientBoostingRegressor (n_estimators=200, max_depth=4, lr=0.05)
-- One model per UniProt ID, saved to output/protein_models/{UNIPROT}_model.pkl
+- One model per target, saved to output/protein_models/{TARGET_ID}_model.pkl
+  (keyed on target_id, not uniprot_id: one accession spans the small-molecule,
+   mRNA and CRISPR modalities of the same gene)
 - Minimum 30 real Boltz2 scores to train; retrain every 20 new scores
 - R² tracked per target in output/protein_models/proteinnet_report.json
 
@@ -56,6 +58,8 @@ MIN_ROWS_TO_TRAIN  = 30   # need at least this many scored molecules per target
 RETRAIN_EVERY      = 20   # retrain when this many new scores appear
 MORGAN_RADIUS      = 2
 MORGAN_BITS        = 2048
+MIN_UNIQUE_LABELS  = 10   # fewer distinct boltz_scores than this ⇒ degenerate target
+MIN_LABEL_STD      = 1e-4 # label std below this ⇒ degenerate target (R² is meaningless)
 
 # ── In-memory state ───────────────────────────────────────────────────────────
 _models:      dict[str, object] = {}   # target_id → fitted GBR
@@ -164,28 +168,36 @@ def _all_target_ids() -> list[str]:
 
 # ── Model persistence ─────────────────────────────────────────────────────────
 
-def _model_path(uniprot_id: str) -> Path:
-    return _MODEL_DIR / f"{uniprot_id}_model.pkl"
+def _model_path(target_id: str) -> Path:
+    """Model file for one target.
+
+    Keyed on target_id, NOT uniprot_id: a single UniProt accession is shared by
+    the small-molecule, mRNA and CRISPR modalities of the same gene (e.g. P11802
+    → CDK4 / CDK4_mRNA / CDK4_CRISPR).  Keying on the accession made those three
+    targets overwrite one another's model, so whichever trained last served
+    predictions for all of them.  Mirrors life_crispr_net._model_path.
+    """
+    return _MODEL_DIR / f"{target_id}_model.pkl"
 
 
-def _save_model(uniprot_id: str, model: object) -> None:
+def _save_model(target_id: str, model: object) -> None:
     try:
         _MODEL_DIR.mkdir(parents=True, exist_ok=True)
-        with _model_path(uniprot_id).open("wb") as fh:
+        with _model_path(target_id).open("wb") as fh:
             pickle.dump(model, fh)
     except Exception as e:
-        log.debug(f"[PROTEINNET] save_model({uniprot_id}): {e}")
+        log.debug(f"[PROTEINNET] save_model({target_id}): {e}")
 
 
-def _load_model(uniprot_id: str) -> Optional[object]:
-    p = _model_path(uniprot_id)
+def _load_model(target_id: str) -> Optional[object]:
+    p = _model_path(target_id)
     if not p.exists():
         return None
     try:
         with p.open("rb") as fh:
             return pickle.load(fh)
     except Exception as e:
-        log.debug(f"[PROTEINNET] load_model({uniprot_id}): {e}")
+        log.debug(f"[PROTEINNET] load_model({target_id}): {e}")
         return None
 
 
@@ -217,11 +229,12 @@ def get_model_report() -> dict:
 def _train_target(target_id: str, uniprot_id: str, rows: list[dict]) -> Optional[dict]:
     """
     Train a GBR for one target.  Returns result dict or None on failure.
-    uniprot_id is used for the model filename; target_id for logging/dict key.
+    target_id keys both the model filename and the in-memory cache; uniprot_id
+    is carried through to the report for display only.
     """
     try:
         from sklearn.ensemble import GradientBoostingRegressor
-        from sklearn.model_selection import cross_val_score
+        from sklearn.model_selection import KFold, cross_val_score
         import numpy as np
     except ImportError as e:
         log.debug(f"[PROTEINNET] sklearn unavailable: {e}")
@@ -241,6 +254,33 @@ def _train_target(target_id: str, uniprot_id: str, rows: list[dict]) -> Optional
     X_arr = np.array(X, dtype=np.float32)
     y_arr = np.array(y, dtype=np.float32)
 
+    # Degenerate-label guard: a target whose Boltz2 scores are all (near-)identical
+    # cannot support a regression.  R² would be a meaningless 1.0 (zero residual on
+    # zero variance) and pre_screen() would return an arbitrary ordering.  Refuse to
+    # train and surface the condition instead of publishing a fake perfect model.
+    n_unique_y = int(np.unique(y_arr).size)
+    y_std      = float(np.std(y_arr))
+    if n_unique_y < MIN_UNIQUE_LABELS or y_std < MIN_LABEL_STD:
+        log.warning(
+            f"[PROTEINNET] {target_id}/{uniprot_id} DEGENERATE data: "
+            f"n={len(X)} unique_y={n_unique_y} y_std={y_std:.3e} — refusing to train "
+            f"(upstream candidate generation is not producing distinct molecules)"
+        )
+        # Evict any previously-saved fake model so pre_screen() cannot silently
+        # keep using it (it would return an arbitrary ordering).
+        _models.pop(target_id, None)
+        try:
+            _model_path(target_id).unlink(missing_ok=True)
+        except Exception as e:
+            log.debug(f"[PROTEINNET] evict degenerate model {target_id}: {e}")
+        return {
+            "status":     "degenerate",
+            "n":          len(X),
+            "unique_y":   n_unique_y,
+            "y_std":      y_std,
+            "uniprot_id": uniprot_id,
+        }
+
     model = GradientBoostingRegressor(
         n_estimators=200,
         max_depth=4,
@@ -250,16 +290,20 @@ def _train_target(target_id: str, uniprot_id: str, rows: list[dict]) -> Optional
     )
     model.fit(X_arr, y_arr)
 
-    # R² via 5-fold CV (capped at available samples)
+    # R² via 5-fold CV (capped at available samples).
+    # MUST use shuffle=True: life_boltz_scores.jsonl is append-ordered by generation
+    # batch, so sequential folds are distributionally disjoint and produce wildly
+    # negative R² (observed -559 on CCL2_mRNA) that the clamp then hides as -1.0.
     n_splits = min(5, len(X))
     try:
-        cv_scores = cross_val_score(model, X_arr, y_arr, cv=n_splits, scoring="r2")
+        cv = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+        cv_scores = cross_val_score(model, X_arr, y_arr, cv=cv, scoring="r2")
         r2 = float(np.mean(cv_scores))
     except Exception:
         r2 = float(model.score(X_arr, y_arr))   # train-set R² as fallback
-    r2 = max(-1.0, min(1.0, r2))   # clamp: near-zero-variance targets (e.g. SMAD4) produce ±1e5
+    r2 = max(-1.0, min(1.0, r2))   # clamp: guards pathological folds
 
-    _save_model(uniprot_id, model)
+    _save_model(target_id, model)
     _models[target_id] = model
     _row_counts[target_id] = len(rows)
 
@@ -298,7 +342,7 @@ def train_all(target_uniprot_map: Optional[dict[str, str]] = None) -> dict:
 
         # Load existing model into memory if not already there
         if tid not in _models:
-            existing = _load_model(uid)
+            existing = _load_model(tid)
             if existing is not None:
                 _models[tid] = existing
 
@@ -322,6 +366,12 @@ def train_all(target_uniprot_map: Optional[dict[str, str]] = None) -> dict:
         res = _train_target(tid, uid, rows)
         if res is None:
             results[tid] = {"status": "failed", "n": n, "uniprot_id": uid}
+            continue
+
+        # Degenerate target: no model was fitted or saved.  Surface it verbatim so
+        # the report shows why, instead of a fake r2=1.0 "ready" model.
+        if res.get("status") == "degenerate":
+            results[tid] = res
             continue
 
         prev_r2 = _report.get("models", {}).get(tid, {}).get("r2")
@@ -373,9 +423,9 @@ def pre_screen(
     """
     model = _models.get(target_id)
     if model is None:
-        # Try loading from disk (e.g. after daemon restart)
-        uid   = _report.get("models", {}).get(target_id, {}).get("uniprot_id", target_id)
-        model = _load_model(uid)
+        # Try loading from disk (e.g. after daemon restart).  Keyed on target_id,
+        # so no report lookup is needed to resolve a filename.
+        model = _load_model(target_id)
         if model is not None:
             _models[target_id] = model
 
