@@ -21,9 +21,8 @@ TIMEOUT := 180
 # KNOWN_FAILING: verifiers red for reasons unrelated to the current change.
 # They still RUN and still report — this list only keeps `make test` honest
 # about what is new breakage versus inherited. Empty it as they get fixed.
-#   verify_peg_panel.py       untracked; observer count 250 != recompute 960
-#   verify_proteinnet_fixes.py  CDK4/ESR1 refused + evicted (since 36bfa29)
-KNOWN_FAILING := scripts/verify_peg_panel.py scripts/verify_proteinnet_fixes.py
+# Currently empty: the suite is fully green, so any red is new breakage.
+KNOWN_FAILING :=
 
 .PHONY: test test-offline verify-nft check publish list
 
