@@ -62,6 +62,24 @@ function log(...args) {
   process.stderr.write('[mint_discovery_nft] ' + args.join(' ') + '\n');
 }
 
+// mpl-token-metadata on-chain limits. Verified empirically against the
+// deployed program via transaction simulation (mpl-token-metadata@3.4.0):
+// a 32-byte name is accepted, 33 bytes returns NameTooLong (0xb).
+// These are BYTE limits, not character limits — non-ASCII costs more than
+// one byte each (an em-dash is 3), so always measure with Buffer.byteLength.
+const MAX_NAME_BYTES   = 32;
+const MAX_SYMBOL_BYTES = 10;
+
+function assertFieldFits(field, value, maxBytes) {
+  const n = Buffer.byteLength(String(value), 'utf8');
+  if (n > maxBytes) {
+    throw new Error(
+      `${field} is ${n} bytes, exceeds Metaplex on-chain limit of ${maxBytes}: ` +
+      `${JSON.stringify(value)}`
+    );
+  }
+}
+
 function ordinalSuffix(n) {
   const s = ['th','st','nd','rd'];
   const v = n % 100;
@@ -80,7 +98,9 @@ function buildCrisprMetadata(args) {
   const num     = Number(args.discoveryNumber);
   const gene    = args.geneName || args.targetId.replace('_CRISPR', '');
 
-  const name    = `LIFE Discovery #${num} — ${gene} gRNA ${date}`;
+  // On-chain Name is capped at MAX_NAME_BYTES; the descriptive title lives in
+  // `description` below, which is off-chain and uncapped.
+  const name    = `LIFE Discovery #${num}`;
   const symbol  = 'LIFE-DSC';
 
   const description =
@@ -88,7 +108,8 @@ function buildCrisprMetadata(args) {
     `${args.minerWallet}. ` +
     `This 20-mer gRNA is the ${rank} validated guide for ${gene} ` +
     `identified by the LIFE decentralized drug-discovery network. ` +
-    `Cancer indication: ${args.cancerIndication || 'oncology'}.`;
+    `Cancer indication: ${args.cancerIndication || 'oncology'}. ` +
+    `Discovered ${date}.`;
 
   const attributes = [
     { trait_type: 'modality',           value: 'CRISPR gRNA' },
@@ -122,14 +143,16 @@ function buildMoleculeMetadata(args) {
   const rank    = ordinalSuffix(Number(args.discoveryRank));
   const num     = Number(args.discoveryNumber);
 
-  const name    = `LIFE Discovery #${num} — ${args.targetId} ${date}`;
+  // On-chain Name is capped at MAX_NAME_BYTES; see buildCrisprMetadata.
+  const name    = `LIFE Discovery #${num}`;
   const symbol  = 'LIFE-DSC';
 
   const description =
     `First confirmed computational hit for ${args.targetName} ` +
     `discovered by LIFE Compute miner ${args.minerWallet}. ` +
     `This molecule is the ${rank} validated binder for ${args.targetId} ` +
-    `identified by the LIFE decentralized drug-discovery network.`;
+    `identified by the LIFE decentralized drug-discovery network. ` +
+    `Discovered ${date}.`;
 
   const attributes = [
     { trait_type: 'modality',           value: 'small molecule' },
@@ -310,6 +333,13 @@ function saveRegistry(registryPath, registry) {
   const meta    = buildMetadata(args);
   const metadataUri = buildMetadataUri(meta, args);
   log('NFT name  :', meta.name);
+
+  // Metaplex rejects over-long name/symbol on-chain (NameTooLong 0xb /
+  // SymbolTooLong 0xc), and simulation failure is the ONLY signal — the umi
+  // client serializes both as variable-length strings and validates neither.
+  // Fail loudly here so a template change can never silently kill minting.
+  assertFieldFits('name',   meta.name,   MAX_NAME_BYTES);
+  assertFieldFits('symbol', meta.symbol, MAX_SYMBOL_BYTES);
 
   if (dryRun) {
     log('DRY RUN — skipping actual mint');
