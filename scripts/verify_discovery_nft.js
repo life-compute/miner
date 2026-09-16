@@ -20,6 +20,9 @@
  *      minted pointing at life-compute.io, which has never resolved).
  *   D. A known-good mint still satisfies the cap on-chain.
  *   E. discoveries.html maps modality/affinity/mint_tx into a correct card.
+ *   F. publish_discovery_metadata.js copies metadata into the site repo, is
+ *      idempotent, and honours --dry-run — it is what makes C's uri resolve,
+ *      so a silent failure there recreates the dead-uri defect.
  *
  * C's reachability probe and D/E need network; they are SKIPPED, not failed,
  * when it is unreachable, so the script still works offline. The offline-safe
@@ -41,6 +44,7 @@ const path = require('path');
 
 const REPO = path.resolve(__dirname, '..');
 const MINT = path.join(REPO, 'scripts/mint_discovery_nft.js');
+const SRC_META = path.join(REPO, 'output/discovery_metadata');
 
 // Metaplex packages live in the Anchor core dir, same as the mint script.
 const NODE_PATH = process.env.NODE_PATH || '/tmp/life-compute/core/node_modules';
@@ -117,6 +121,41 @@ function renderCard(entry) {
   // declarations to this strict-mode module and hide loadDiscoveries.
   (0, eval)(body);
   return { els, load: () => global.loadDiscoveries() };
+}
+
+/** F. publisher, exercised against a throwaway repo — never the real site. */
+function checkPublisher(tmp) {
+  const site   = path.join(tmp, 'site');
+  const remote = path.join(tmp, 'remote.git');
+  fs.mkdirSync(site);
+
+  const g = (...a) => execFileSync('git', a, { cwd: site, encoding: 'utf8' });
+  g('init', '-q', '-b', 'main');
+  g('config', 'user.email', 'verify@local');
+  g('config', 'user.name', 'verify');
+  fs.writeFileSync(path.join(site, 'README'), 'fixture\n');
+  g('add', '-A');
+  g('commit', '-qm', 'init');
+  execFileSync('git', ['init', '-q', '--bare', remote]);
+  g('remote', 'add', 'origin', remote);
+  g('push', '-q', '-u', 'origin', 'main');
+
+  const pub = (...a) => execFileSync('node',
+    [path.join(REPO, 'scripts/publish_discovery_metadata.js'), ...a],
+    { env: { ...process.env, SITE_REPO: site }, encoding: 'utf8' });
+  const dest = path.join(site, 'discoveries/1.json');
+
+  check(/DRY RUN/.test(pub('--dry-run')), 'F: --dry-run reports without writing');
+  check(!fs.existsSync(dest), 'F: --dry-run wrote nothing');
+
+  pub();
+  check(fs.existsSync(dest), 'F: publishes metadata into the site repo');
+  check(fs.readFileSync(dest, 'utf8') ===
+        fs.readFileSync(path.join(SRC_META, '1.json'), 'utf8'),
+        'F: published copy is byte-identical');
+  check(/discoveries\/1\.json/.test(g('show', '--stat', '--oneline', 'HEAD')),
+        'F: committed to git');
+  check(/already up to date/i.test(pub()), 'F: idempotent on re-run');
 }
 
 async function main() {
@@ -199,21 +238,20 @@ async function main() {
     check(!DEAD_URL.test(JSON.stringify(meta)),
           'C: metadata free of the dead domain');
 
-    if (offline) {
-      skip('C. reachability', '--offline');
-    } else {
-      for (const [label, url] of [['metadata uri', uri],
-                                  ['image', meta.image],
-                                  ['external_url', meta.external_url]]) {
-        const code = await headStatus(url);
-        check(code >= 200 && code < 400, `C: ${label} resolves`, `HTTP ${code} ${url}`);
-      }
-    }
+    checkPublisher(tmp);
 
     if (offline) {
+      skip('C. reachability', '--offline');
       skip('D. on-chain    ', '--offline');
       skip('E. gallery     ', '--offline');
       return;
+    }
+
+    for (const [label, url] of [['metadata uri', uri],
+                                ['image', meta.image],
+                                ['external_url', meta.external_url]]) {
+      const code = await headStatus(url);
+      check(code >= 200 && code < 400, `C: ${label} resolves`, `HTTP ${code} ${url}`);
     }
 
     // ── D. known-good mint on-chain ──────────────────────────────────────
