@@ -1670,6 +1670,16 @@ def _maybe_mint_discovery_nft(
                 log.info(f"  [DISCOVERY]   mint  : {parsed.get('mint_address')}")
                 log.info(f"  [DISCOVERY]   tx    : {parsed.get('mint_tx')}")
                 log.info(f"  [DISCOVERY]   {parsed.get('explorer')}")
+                # The uri is immutable; if publishing failed it 404s forever
+                # unless someone runs `make publish`. Never let that be quiet.
+                if parsed.get("published"):
+                    log.info(f"  [DISCOVERY]   uri   : {parsed.get('metadata_uri')}")
+                else:
+                    log.error(
+                        f"  [DISCOVERY] metadata NOT published — "
+                        f"{parsed.get('metadata_uri')} will 404. "
+                        f"Run: make publish"
+                    )
             elif status == "duplicate":
                 log.info(f"  [DISCOVERY] SMILES already minted — skipping")
             elif status == "dry_run":
@@ -2209,11 +2219,19 @@ def main():
             yield the GIL to the main scoring loop.  Never raises — all
             exceptions are caught and logged so a PULSE crash never kills the
             miner process.
+
+            Backoff: pulse_run_sweep() returns True when it burned its full
+            attempt budget without evaluating a single new molecule (the
+            vocabulary is exhausted — every reachable candidate is already in
+            state.seen).  Re-entering at the 2 s cadence in that state is a
+            pure CPU-burning spin (~1000 dedup attempts/s, zero progress), so
+            back off to 60 s until new chemistry becomes reachable.
             """
             log.info("[PULSE] Background sweep thread started")
+            _idle_sleep = 2
             while True:
                 try:
-                    pulse_run_sweep(
+                    exhausted = pulse_run_sweep(
                         max_configs=50,
                         verbose=False,
                         use_mutants=True,
@@ -2221,7 +2239,19 @@ def main():
                     )
                 except Exception as _be:
                     log.warning(f"[PULSE] sweep error (non-fatal): {_be}")
-                time.sleep(2)
+                    exhausted = False
+                if exhausted:
+                    if _idle_sleep != 60:
+                        log.warning(
+                            "[PULSE] vocabulary exhausted — backing off to 60s "
+                            "between sweeps (was %ss)", _idle_sleep
+                        )
+                    _idle_sleep = 60
+                else:
+                    if _idle_sleep != 2:
+                        log.info("[PULSE] new molecules found — resuming 2s cadence")
+                    _idle_sleep = 2
+                time.sleep(_idle_sleep)
         threading.Thread(target=_pulse_loop, daemon=True, name="pulse-sweep").start()
     else:
         log.warning(f"[PULSE] life_pulse unavailable — pulse sweep disabled ({_pulse_err})")

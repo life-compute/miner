@@ -156,6 +156,40 @@ function checkPublisher(tmp) {
   check(/discoveries\/1\.json/.test(g('show', '--stat', '--oneline', 'HEAD')),
         'F: committed to git');
   check(/already up to date/i.test(pub()), 'F: idempotent on re-run');
+
+  // The mint path must publish by itself — a manual step is exactly how the
+  // dead-uri defect happened. Assert the wiring and its failure reporting.
+  const mintSrc = fs.readFileSync(MINT, 'utf8');
+  const PUBLISH_CALL = 'const published = publishMetadata(';
+  check(mintSrc.includes(PUBLISH_CALL),
+        'F: mint calls publishMetadata after saving the registry');
+  check(mintSrc.indexOf('saveRegistry(args.registryPath') <
+        mintSrc.indexOf(PUBLISH_CALL),
+        'F: publish runs after the registry write');
+  check(/published,/.test(mintSrc),
+        'F: mint reports publish outcome in its result JSON');
+  check(/try \{[\s\S]*?publish_discovery_metadata[\s\S]*?\} catch/.test(mintSrc),
+        'F: publish failure cannot abort an already-minted NFT');
+
+  const daemon = fs.readFileSync(path.join(REPO, 'miner_daemon.py'), 'utf8');
+  check(/metadata NOT published/.test(daemon) && /log\.error/.test(daemon),
+        'F: daemon logs an ERROR when publishing fails');
+
+  // Regression: the mint writes metadata beside its registry, which is not
+  // always REPO/output. Publishing the wrong directory still "succeeds" and
+  // leaves the freshly-minted uri 404ing — caught only by checking that the
+  // file the mint wrote is the file that lands.
+  const far = path.join(tmp, 'elsewhere');
+  fs.mkdirSync(path.join(far, 'discovery_metadata'), { recursive: true });
+  fs.writeFileSync(path.join(far, 'discovery_metadata/99.json'), '{"name":"#99"}');
+  execFileSync('node', [path.join(REPO, 'scripts/publish_discovery_metadata.js'),
+                        '--src', path.join(far, 'discovery_metadata')],
+               { env: { ...process.env, SITE_REPO: site }, encoding: 'utf8' });
+  check(fs.existsSync(path.join(site, 'discoveries/99.json')),
+        'F: --src publishes the directory the mint actually wrote');
+  check(/publishMetadata\(\s*\n?\s*path\.join\(path\.dirname\(args\.registryPath\)/
+        .test(mintSrc),
+        'F: mint passes its own metadata dir to the publisher');
 }
 
 async function main() {

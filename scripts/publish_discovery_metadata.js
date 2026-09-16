@@ -13,6 +13,7 @@
  * Usage:
  *   node scripts/publish_discovery_metadata.js
  *   node scripts/publish_discovery_metadata.js --dry-run
+ *   node scripts/publish_discovery_metadata.js --src /path/to/discovery_metadata
  *   SITE_REPO=/path/to/life-compute.github.io node scripts/publish_discovery_metadata.js
  */
 
@@ -23,10 +24,15 @@ const fs   = require('fs');
 const path = require('path');
 
 const REPO      = path.resolve(__dirname, '..');
-const SRC_DIR   = path.join(REPO, 'output/discovery_metadata');
+const argv      = process.argv.slice(2);
+const srcFlag   = argv.indexOf('--src');
+// The mint writes metadata beside its registry, which is not always
+// REPO/output — it passes --src so we ship the files it actually wrote.
+const SRC_DIR   = srcFlag !== -1 ? path.resolve(argv[srcFlag + 1])
+                                 : path.join(REPO, 'output/discovery_metadata');
 const SITE_REPO = process.env.SITE_REPO || '/tmp/life-compute.github.io';
 const DEST_DIR  = path.join(SITE_REPO, 'discoveries');
-const dryRun    = process.argv.includes('--dry-run');
+const dryRun    = argv.includes('--dry-run');
 
 const git = (args, cwd = SITE_REPO) =>
   execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();

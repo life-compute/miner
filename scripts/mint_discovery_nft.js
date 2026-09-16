@@ -106,6 +106,31 @@ function discoveryMetadataUrl(discNum) {
   return `${SITE_ORIGIN}/discoveries/${discNum}.json`;
 }
 
+/**
+ * Ship metadata to the public site so the uri just minted resolves.
+ *
+ * `srcDir` is the directory buildMetadataUri actually wrote to — derived from
+ * registryPath, which is not always REPO/output. Passing it explicitly stops
+ * the publisher silently shipping a different directory and reporting success.
+ *
+ * Never throws: the NFT is already on-chain by the time this runs, and
+ * `make publish` recovers idempotently. Returns true on success.
+ */
+function publishMetadata(srcDir) {
+  try {
+    const out = require('child_process').execFileSync(
+      process.execPath,
+      [path.join(__dirname, 'publish_discovery_metadata.js'), '--src', srcDir],
+      { encoding: 'utf8', timeout: 120000 });
+    log('publish:', out.trim().split('\n').pop());
+    return true;
+  } catch (e) {
+    log(`WARNING: publish failed (${e.message.slice(0, 120)}). ` +
+        `The uri 404s until you run: make publish`);
+    return false;
+  }
+}
+
 function assertFieldFits(field, value, maxBytes) {
   const n = Buffer.byteLength(String(value), 'utf8');
   if (n > maxBytes) {
@@ -484,9 +509,19 @@ function saveRegistry(registryPath, registry) {
   saveRegistry(args.registryPath, registry);
   log('Registry saved:', args.registryPath);
 
+  // Publish immediately. The uri we just wrote on-chain is immutable, so if
+  // nobody ships the metadata the token points at a 404 forever. Doing it here
+  // — in the process that just minted — is the only place it cannot be
+  // forgotten. Non-fatal: the mint already succeeded, and `make publish`
+  // re-runs idempotently if this fails.
+  const published = publishMetadata(
+    path.join(path.dirname(args.registryPath), 'discovery_metadata'));
+
   const result = {
     status:           'minted',
     nft_name:         meta.name,
+    metadata_uri:     metadataUri,
+    published,
     mint_address:     mintAddr,
     mint_tx:          mintTx,
     discovery_number: entry.discovery_number,
