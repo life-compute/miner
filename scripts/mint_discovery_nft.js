@@ -94,8 +94,15 @@ const NFT_IMAGE   = 'life-coin-256.png';
  * The only alternative would be burning and re-minting under a new address,
  * which would break the provenance the NFT exists to record. Accepted as-is.
  *
- * Every mint from #2 onward uses discoveryMetadataUrl() and is verified
- * reachable by scripts/verify_discovery_nft.js before release.
+ * ORPHANED VERIFICATION MINTS (devnet only)
+ *
+ * E2greRBaSHGY7EMLbmpXTNYAfnfcxMd7oMaFTm1pdzNf and the #3 mint from the same
+ * session were created to prove auto-publish end-to-end. They were minted
+ * against scratch registries, so _next_discovery_numbers handed out numbers
+ * the live daemon later reused: their uris now resolve to the daemon's
+ * metadata for a different target. Devnet only, no provenance value, and a
+ * concrete instance of the discovery-number race tracked as a known issue.
+ * Do not mint against a scratch registry on mainnet for this reason.
  */
 const BROKEN_URI_MINTS = Object.freeze({
   CQ8yGe94RazwgwBPY4WwPa9cNQ8Eu5bX1yUKRCoyXfnZ: 'https://life-compute.io/discoveries/1',

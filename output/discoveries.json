@@ -1,1 +1,87 @@
-{"discoveries":[],"smiles_index":{},"target_counts":{}}
+{
+  "discoveries": [
+    {
+      "discovery_number": 1,
+      "discovery_rank": 1,
+      "target_id": "CCND1_mRNA",
+      "target_name": "G1/S-specific cyclin-D1 (mRNA target)",
+      "uniprot_id": "P24385",
+      "miner_wallet": "4zn1WQZy48ysUeSo2WCFwF9LmoPhZedZq7iKLcAH3pc8",
+      "validator_tx": "5civFaq9Cq4cjxcePPDEp74w9pecq9GRq58qt1EKpuom5nU8jm7QzN8h4EqkaFi9SVQr4fdEoE1E8A3eRFWpqAfT",
+      "timestamp": "2026-09-16T11:52:57.518866+00:00",
+      "nft_name": "LIFE Discovery #1",
+      "mint_address": "DLcvVyzYGd5Qp4ZFqK79fCai1bXHy6ACHiqBYTs7dmwy",
+      "mint_tx": "DlePxK1ydGmfhGjic3ykPis3xWes7rT4eItp5aIxbvB4nMd2Gasn+Cz1GYBq9Wb0qSVSDez+DgUYPsgd+wZkCQ==",
+      "foundation_wallet": "2jVdMx7fb88txbG6YoZzC7kT4Tq8rJDaWrNgbZ3ZnqCb",
+      "cluster": "devnet",
+      "modality": "small_molecule",
+      "smiles": "CN[C@H]1CCCN(C(=O)Cc2cccc(Cl)c2)C1",
+      "affinity": -8.3695
+    },
+    {
+      "discovery_number": 2,
+      "discovery_rank": 1,
+      "target_id": "MYC_CRISPR",
+      "target_name": "MYC gRNA (knockout oncogene driver)",
+      "uniprot_id": "P01106",
+      "miner_wallet": "4zn1WQZy48ysUeSo2WCFwF9LmoPhZedZq7iKLcAH3pc8",
+      "validator_tx": "i2Foa7QZcGVVPn5HbAzwFbNeSkoa9fVKQqNfobhkjYMCDBF1dNXK47ej1r7UAEx4w1byMRQhkSyT3smwFnSN3Ue",
+      "timestamp": "2026-09-16T12:05:24.039490+00:00",
+      "nft_name": "LIFE Discovery #2",
+      "mint_address": "13RmLembRVN8gkVSdKYdSiWhMLKBmApkeT5a7wezVoj4",
+      "mint_tx": "NRwqbSs6tV4MXtO3paYstBRS7mv1tRw4axC5ASX14JRnRO7+tCVJWSCFPiVG/5JtC13VQTwHedehrgRE00DkCw==",
+      "foundation_wallet": "2jVdMx7fb88txbG6YoZzC7kT4Tq8rJDaWrNgbZ3ZnqCb",
+      "cluster": "devnet",
+      "modality": "crispr_grna",
+      "grna_sequence": "GAAGCCGCCTCCTCGTCGAA",
+      "gene_name": "MYC",
+      "cancer_indication": "Burkitt lymphoma, TNBC, neuroblastoma",
+      "on_target_score": 0.3008,
+      "off_target_score": 1,
+      "delivery_score": 1,
+      "affinity": -8.7139
+    },
+    {
+      "discovery_number": 3,
+      "discovery_rank": 1,
+      "target_id": "IL6_mRNA",
+      "target_name": "Interleukin-6 (mRNA target)",
+      "uniprot_id": "P05231",
+      "miner_wallet": "4zn1WQZy48ysUeSo2WCFwF9LmoPhZedZq7iKLcAH3pc8",
+      "validator_tx": "5N34YBw4DQ3ixQgJ9qZ67XRtZEDWChzwSHKkcWVqm5ZgmHFu7PFfuy9YHQmmmmuWFY89gnTtx6hVhtQTvapHgJ7D",
+      "timestamp": "2026-09-16T12:11:25.973359+00:00",
+      "nft_name": "LIFE Discovery #3",
+      "mint_address": "AbMebNzTYTL11Ew1Axes2sf3fQ9ydt9euFDYc5GyZRBJ",
+      "mint_tx": "16ybCfHTz7vvOlQ53hfUaP3b5u5b5HvQVjj6P9uL3HS6GXQSpR3i8ej+ktg2UZPOiZkXeNZE5F6i37ARkz/MBA==",
+      "foundation_wallet": "2jVdMx7fb88txbG6YoZzC7kT4Tq8rJDaWrNgbZ3ZnqCb",
+      "cluster": "devnet",
+      "modality": "small_molecule",
+      "smiles": "Cn1ccnc1-c1ccc([C@@H]2CNC(=O)C2)cc1",
+      "affinity": -8.3708
+    }
+  ],
+  "smiles_index": {
+    "CN[C@H]1CCCN(C(=O)Cc2cccc(Cl)c2)C1": {
+      "discovery_number": 1,
+      "mint_address": "DLcvVyzYGd5Qp4ZFqK79fCai1bXHy6ACHiqBYTs7dmwy",
+      "mint_tx": "DlePxK1ydGmfhGjic3ykPis3xWes7rT4eItp5aIxbvB4nMd2Gasn+Cz1GYBq9Wb0qSVSDez+DgUYPsgd+wZkCQ=="
+    },
+    "Cn1ccnc1-c1ccc([C@@H]2CNC(=O)C2)cc1": {
+      "discovery_number": 3,
+      "mint_address": "AbMebNzTYTL11Ew1Axes2sf3fQ9ydt9euFDYc5GyZRBJ",
+      "mint_tx": "16ybCfHTz7vvOlQ53hfUaP3b5u5b5HvQVjj6P9uL3HS6GXQSpR3i8ej+ktg2UZPOiZkXeNZE5F6i37ARkz/MBA=="
+    }
+  },
+  "target_counts": {
+    "CCND1_mRNA": 1,
+    "MYC_CRISPR": 1,
+    "IL6_mRNA": 1
+  },
+  "grna_index": {
+    "GAAGCCGCCTCCTCGTCGAA": {
+      "discovery_number": 2,
+      "mint_address": "13RmLembRVN8gkVSdKYdSiWhMLKBmApkeT5a7wezVoj4",
+      "mint_tx": "NRwqbSs6tV4MXtO3paYstBRS7mv1tRw4axC5ASX14JRnRO7+tCVJWSCFPiVG/5JtC13VQTwHedehrgRE00DkCw=="
+    }
+  }
+}

@@ -1,7 +1,7 @@
 {
-  "name": "LIFE Discovery #1",
+  "name": "LIFE Discovery #3",
   "symbol": "LIFE-DSC",
-  "description": "First confirmed computational hit for G1/S-specific cyclin-D1 (mRNA target) discovered by LIFE Compute miner 4zn1WQZy48ysUeSo2WCFwF9LmoPhZedZq7iKLcAH3pc8. This molecule is the 1st validated binder for CCND1_mRNA identified by the LIFE decentralized drug-discovery network. Discovered 2026-09-16.",
+  "description": "First confirmed computational hit for Interleukin-6 (mRNA target) discovered by LIFE Compute miner 4zn1WQZy48ysUeSo2WCFwF9LmoPhZedZq7iKLcAH3pc8. This molecule is the 1st validated binder for IL6_mRNA identified by the LIFE decentralized drug-discovery network. Discovered 2026-09-16.",
   "image": "https://lifecompute.ai/assets/life-coin-256.png",
   "external_url": "https://lifecompute.ai/discoveries.html",
   "attributes": [
@@ -11,23 +11,23 @@
     },
     {
       "trait_type": "target_id",
-      "value": "CCND1_mRNA"
+      "value": "IL6_mRNA"
     },
     {
       "trait_type": "target_name",
-      "value": "G1/S-specific cyclin-D1 (mRNA target)"
+      "value": "Interleukin-6 (mRNA target)"
     },
     {
       "trait_type": "uniprot_id",
-      "value": "P24385"
+      "value": "P05231"
     },
     {
       "trait_type": "smiles",
-      "value": "CN[C@H]1CCCN(C(=O)Cc2cccc(Cl)c2)C1"
+      "value": "Cn1ccnc1-c1ccc([C@@H]2CNC(=O)C2)cc1"
     },
     {
       "trait_type": "affinity_kcal_mol",
-      "value": "-8.3695"
+      "value": "-8.3708"
     },
     {
       "trait_type": "discovery_rank",
@@ -35,7 +35,7 @@
     },
     {
       "trait_type": "discovery_number",
-      "value": "1"
+      "value": "3"
     },
     {
       "trait_type": "miner_wallet",
@@ -43,11 +43,11 @@
     },
     {
       "trait_type": "validator_tx",
-      "value": "5civFaq9Cq4cjxcePPDEp74w9pecq9GRq58qt1EKpuom5nU8jm7QzN8h4EqkaFi9SVQr4fdEoE1E8A3eRFWpqAfT"
+      "value": "5N34YBw4DQ3ixQgJ9qZ67XRtZEDWChzwSHKkcWVqm5ZgmHFu7PFfuy9YHQmmmmuWFY89gnTtx6hVhtQTvapHgJ7D"
     },
     {
       "trait_type": "timestamp",
-      "value": "2026-09-16T11:52:57.518866+00:00"
+      "value": "2026-09-16T12:11:25.973359+00:00"
     },
     {
       "trait_type": "source",
