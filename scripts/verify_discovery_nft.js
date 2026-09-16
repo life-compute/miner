@@ -14,14 +14,17 @@
  *
  *   A. Source parses; no builder emits a name wider than the on-chain cap.
  *   B. assertFieldFits guards both fields and runs before the dry-run exit.
- *   C. Dry-run yields a short name, keeps the date off-chain, writes no registry.
+ *   C. Dry-run yields a short name, keeps the date off-chain, writes no registry,
+ *      and emits a metadata URI that actually RESOLVES — the uri is immutable
+ *      once minted, so an unreachable host is a permanent defect (NFT #1 was
+ *      minted pointing at life-compute.io, which has never resolved).
  *   D. A known-good mint still satisfies the cap on-chain.
  *   E. discoveries.html maps modality/affinity/mint_tx into a correct card.
  *
- * D and E need devnet; they are SKIPPED, not failed, when it is unreachable,
- * so the script still works offline. A-C are always enforced. Nothing is
- * minted and no real registry is touched: the dry-run writes to a scratch dir
- * that is removed on exit.
+ * C's reachability probe and D/E need network; they are SKIPPED, not failed,
+ * when it is unreachable, so the script still works offline. The offline-safe
+ * parts of A-C are always enforced. Nothing is minted and no real registry is
+ * touched: the dry-run writes to a scratch dir that is removed on exit.
  *
  * Usage:
  *   node scripts/verify_discovery_nft.js
@@ -67,6 +70,21 @@ function check(cond, msg, detail) {
 
 function skip(section, why) {
   console.log(`  ${section}: SKIPPED (${why})`);
+}
+
+/** Status code for a URL, following redirects. 0 when unreachable. */
+async function headStatus(url, timeoutMs = 12000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    // GitHub Pages rejects HEAD on some paths; GET is the honest probe.
+    const res = await fetch(url, { redirect: 'follow', signal: ctl.signal });
+    return res.status;
+  } catch {
+    return 0;
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 /** Load the page's script body into global scope and render one entry. */
@@ -162,6 +180,36 @@ async function main() {
     check(JSON.parse(fs.readFileSync(registryPath, 'utf8')).discoveries.length === 0,
           'C: dry-run writes no registry entry');
 
+    // The uri is immutable once minted, so an unreachable host can never be
+    // corrected. Assert the generated URL and the artwork it references both
+    // resolve. Source of truth is the saved metadata file, not a guess.
+    const metaFile = path.join(tmp, 'discovery_metadata/1.json');
+    check(fs.existsSync(metaFile), 'C: metadata file written');
+    const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+    const uri  = dry.metadata_uri;
+    check(Boolean(uri), 'C: dry-run reports the metadata uri', uri);
+
+    // The dead host may appear in comments (documenting NFT #1's defect) and
+    // in BROKEN_URI_MINTS, but must never reach a template literal or string
+    // that could become a live uri. Strip comments before asserting.
+    const DEAD_URL = /https?:\/\/(?:www\.)?life-compute\.io/;
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+                    .replace(/^\s*const BROKEN_URI_MINTS[\s\S]*?\}\);$/m, '');
+    check(!DEAD_URL.test(code), 'C: no live URL on the dead domain');
+    check(!DEAD_URL.test(JSON.stringify(meta)),
+          'C: metadata free of the dead domain');
+
+    if (offline) {
+      skip('C. reachability', '--offline');
+    } else {
+      for (const [label, url] of [['metadata uri', uri],
+                                  ['image', meta.image],
+                                  ['external_url', meta.external_url]]) {
+        const code = await headStatus(url);
+        check(code >= 200 && code < 400, `C: ${label} resolves`, `HTTP ${code} ${url}`);
+      }
+    }
+
     if (offline) {
       skip('D. on-chain    ', '--offline');
       skip('E. gallery     ', '--offline');
@@ -185,6 +233,17 @@ async function main() {
       check(/^LIFE Discovery #\d+$/.test(onChainName),
             'D: on-chain name matches the current format', onChainName);
       check(asset.mint.supply.toString() === '1', 'D: supply is 1');
+
+      // NFT #1 predates the URI fix and is immutable, so its dead uri is a
+      // permanent, accepted defect. Assert it stays a known exception rather
+      // than silently spreading: no LATER mint may carry that host.
+      check(/life-compute\.io/.test(asset.metadata.uri),
+            'D: #1 still carries the known-broken uri (documented defect)',
+            asset.metadata.uri);
+      check(asset.metadata.isMutable === false,
+            'D: #1 is immutable — defect is unrepairable by design');
+      check(/BROKEN_URI_MINTS/.test(src) && src.includes(KNOWN_MINT),
+            'D: defect documented in mint_discovery_nft.js');
     } catch (e) {
       skip('D. on-chain    ', e.message.slice(0, 60));
     }

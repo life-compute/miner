@@ -1,0 +1,86 @@
+{
+  "name": "LIFE Discovery #1",
+  "symbol": "LIFE-DSC",
+  "description": "Top-10% CRISPR guide RNA for PDL1 discovered by LIFE Compute miner 4zn1WQZy48ysUeSo2WCFwF9LmoPhZedZq7iKLcAH3pc8. This 20-mer gRNA is the 1st validated guide for PDL1 identified by the LIFE decentralized drug-discovery network. Cancer indication: multiple solid tumors. Discovered 2026-09-16.",
+  "image": "https://lifecompute.ai/assets/life-coin-256.png",
+  "external_url": "https://lifecompute.ai/discoveries.html",
+  "attributes": [
+    {
+      "trait_type": "modality",
+      "value": "CRISPR gRNA"
+    },
+    {
+      "trait_type": "target_id",
+      "value": "PDL1_CRISPR"
+    },
+    {
+      "trait_type": "gene_name",
+      "value": "PDL1"
+    },
+    {
+      "trait_type": "cancer_indication",
+      "value": "multiple solid tumors"
+    },
+    {
+      "trait_type": "uniprot_id",
+      "value": "Q9NZQ7"
+    },
+    {
+      "trait_type": "grna_sequence",
+      "value": "GACCTGGAGGTCCAGGTTAC"
+    },
+    {
+      "trait_type": "on_target_score",
+      "value": "0.8200"
+    },
+    {
+      "trait_type": "off_target_score",
+      "value": "0.9100"
+    },
+    {
+      "trait_type": "delivery_score",
+      "value": "0.7400"
+    },
+    {
+      "trait_type": "combined_affinity",
+      "value": "-8.577"
+    },
+    {
+      "trait_type": "discovery_rank",
+      "value": "1"
+    },
+    {
+      "trait_type": "discovery_number",
+      "value": "1"
+    },
+    {
+      "trait_type": "miner_wallet",
+      "value": "4zn1WQZy48ysUeSo2WCFwF9LmoPhZedZq7iKLcAH3pc8"
+    },
+    {
+      "trait_type": "validator_tx",
+      "value": "verify-live-mint"
+    },
+    {
+      "trait_type": "timestamp",
+      "value": "2026-09-16T07:04:33+00:00"
+    },
+    {
+      "trait_type": "source",
+      "value": "LIFE Compute / CRISPR gRNA Optimizer"
+    },
+    {
+      "trait_type": "proceeds",
+      "value": "100% to LIFE Foundation"
+    }
+  ],
+  "properties": {
+    "category": "image",
+    "creators": [
+      {
+        "address": "2jVdMx7fb88txbG6YoZzC7kT4Tq8rJDaWrNgbZ3ZnqCb",
+        "share": 100
+      }
+    ]
+  }
+}

@@ -70,6 +70,42 @@ function log(...args) {
 const MAX_NAME_BYTES   = 32;
 const MAX_SYMBOL_BYTES = 10;
 
+// Public site that hosts discovery metadata + NFT artwork. This is baked into
+// every minted token's immutable `uri`, so a wrong value is permanent —
+// verify_discovery_nft.js asserts the generated URL actually resolves.
+// The apex is lifecompute.ai (see the site repo's CNAME); life-compute.io has
+// never resolved and life-compute.github.io only redirects to the apex.
+const SITE_ORIGIN = process.env.LIFE_SITE_ORIGIN || 'https://lifecompute.ai';
+// Single coin artwork for now; split per-modality when dedicated art exists.
+const NFT_IMAGE   = 'life-coin-256.png';
+
+/**
+ * KNOWN PERMANENT DEFECT — discovery NFT #1
+ *
+ * Mint CQ8yGe94RazwgwBPY4WwPa9cNQ8Eu5bX1yUKRCoyXfnZ (devnet, 2026-09-16) was
+ * the first successful mint, made before the URI fix. Its on-chain uri is
+ * https://life-compute.io/discoveries/1 — a host that has never resolved
+ * (HTTP 000). Wallets and explorers will show it without metadata or artwork.
+ *
+ * It CANNOT be repaired. The token was minted isMutable:false, so updateV1 on
+ * the uri is rejected by the program. Verified by simulation:
+ *   err   = {"InstructionError":[0,{"Custom":59}]}
+ *   log   = "Program log: Data is immutable"
+ * The only alternative would be burning and re-minting under a new address,
+ * which would break the provenance the NFT exists to record. Accepted as-is.
+ *
+ * Every mint from #2 onward uses discoveryMetadataUrl() and is verified
+ * reachable by scripts/verify_discovery_nft.js before release.
+ */
+const BROKEN_URI_MINTS = Object.freeze({
+  CQ8yGe94RazwgwBPY4WwPa9cNQ8Eu5bX1yUKRCoyXfnZ: 'https://life-compute.io/discoveries/1',
+});
+
+/** Canonical on-chain URI for discovery <n>'s off-chain metadata JSON. */
+function discoveryMetadataUrl(discNum) {
+  return `${SITE_ORIGIN}/discoveries/${discNum}.json`;
+}
+
 function assertFieldFits(field, value, maxBytes) {
   const n = Buffer.byteLength(String(value), 'utf8');
   if (n > maxBytes) {
@@ -187,19 +223,20 @@ function buildMetadata(args) {
 //   1. Write the full metadata JSON to output/discovery_metadata/<n>.json
 //   2. Return a short canonical URL that fits comfortably inside the tx.
 // The URI is stored on-chain; wallets fetch it at display time.
-// On devnet the URL does not need to be live at mint time — only at display time.
+//
+// The URI does not need to resolve at mint time, but it MUST resolve by
+// display time and the token is minted immutable — a wrong host can never be
+// corrected. Publish with scripts/publish_discovery_metadata.js, which copies
+// output/discovery_metadata/*.json to <site>/discoveries/ and pushes.
 function buildMetadataUri(meta, args) {
-  const isCrispr = Boolean(args.isCrispr);
-  const discNum  = Number(args.discoveryNumber);
+  const discNum = Number(args.discoveryNumber);
 
   const json = {
     name:        meta.name,
     symbol:      meta.symbol,
     description: meta.description,
-    image:       isCrispr
-      ? 'https://life-compute.github.io/assets/discovery-nft-crispr.png'
-      : 'https://life-compute.github.io/assets/discovery-nft.png',
-    external_url: 'https://life-compute.io',
+    image:       `${SITE_ORIGIN}/assets/${NFT_IMAGE}`,
+    external_url: `${SITE_ORIGIN}/discoveries.html`,
     attributes:  meta.attributes,
     properties: {
       category: 'image',
@@ -209,7 +246,7 @@ function buildMetadataUri(meta, args) {
     },
   };
 
-  // Save full metadata locally for reference / future hosting
+  // Save full metadata locally; publish_discovery_metadata.js ships it.
   try {
     const registryDir = path.dirname(args.registryPath);
     const metaDir     = path.join(registryDir, 'discovery_metadata');
@@ -222,7 +259,7 @@ function buildMetadataUri(meta, args) {
   }
 
   // Short canonical URL — well under Solana's tx size limit
-  return `https://life-compute.io/discoveries/${discNum}`;
+  return discoveryMetadataUrl(discNum);
 }
 
 // ── Discovery registry helpers ───────────────────────────────────────────────
@@ -347,6 +384,7 @@ function saveRegistry(registryPath, registry) {
       status:           'dry_run',
       nft_name:         meta.name,
       symbol:           meta.symbol,
+      metadata_uri:     metadataUri,
       foundation_wallet: args.foundationWallet,
       metadata_preview: meta,
     };
