@@ -66,9 +66,14 @@ _DINUCS = [
 
 def modality_from_target_id(target_id: Optional[int], seq: str = "") -> str:
     """
-    Primary: target_id numeric range.
-    Fallback: ACGT/length-20 heuristic when target_id is None.
+    PAYLOAD-FIRST: a 20-mer pure-ACGT `seq` is a gRNA whatever target_id says.
+    On-chain target_id is untrustworthy here — submit_result.rs assigns
+    `result.target_id = job.target_id` from a job PDA seeded without target_id.
+    See skill ref job-pda-target-misrouting.md.
     """
+    s = seq.upper().strip()
+    if len(s) == 20 and all(c in "ACGT" for c in s):
+        return "crispr"
     if target_id is not None:
         tid = int(target_id)
         if PROTEIN_ID_MIN <= tid <= PROTEIN_ID_MAX:
@@ -77,10 +82,6 @@ def modality_from_target_id(target_id: Optional[int], seq: str = "") -> str:
             return "mrna"
         if CRISPR_ID_MIN <= tid <= CRISPR_ID_MAX:
             return "crispr"
-    # Fallback: sequence heuristic
-    s = seq.upper().strip()
-    if len(s) == 20 and all(c in "ACGT" for c in s):
-        return "crispr"
     return "protein"
 
 

@@ -109,16 +109,19 @@ def _rpc(solana_rpc: str, method: str, params: list):
 # ── Modality resolver ─────────────────────────────────────────────────────────
 
 def _modality(target_id: int, seq: str) -> str:
-    """Primary: target_id range. Fallback: ACGT/len-20 heuristic."""
+    """Resolve modality. PAYLOAD-FIRST: a 20-mer pure-ACGT payload is a gRNA
+    whatever target_id the chain recorded, because submit_result.rs assigns
+    `result.target_id = job.target_id` from a job PDA seeded without target_id.
+    See skill ref job-pda-target-misrouting.md.
+    """
+    s = seq.upper().strip()
+    if len(s) == 20 and all(c in "ACGT" for c in s):
+        return "crispr"
     if 0 <= target_id <= 1999:
         return "protein"
     if 2000 <= target_id <= 2029:
         return "mrna"
     if 3000 <= target_id <= 3009:
-        return "crispr"
-    # Fallback
-    s = seq.upper().strip()
-    if len(s) == 20 and all(c in "ACGT" for c in s):
         return "crispr"
     return "protein"
 

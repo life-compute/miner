@@ -119,12 +119,29 @@ def load_dataset() -> list[dict]:
 
 
 def _split_by_modality(rows: list[dict]) -> dict[str, list[dict]]:
-    """Split confirmed rows into protein / mrna / crispr buckets."""
+    """Split confirmed rows into protein / mrna / crispr buckets.
+
+    PAYLOAD-OVERRIDE for historical rows: a 20-mer pure-ACGT `sequence` is a
+    gRNA whatever `modality`/`target_id` says. The protein/mRNA branches
+    featurize `sequence` as SMILES, where a gRNA yields MolFromSmiles->None and
+    is silently dropped. See skill ref job-pda-target-misrouting.md.
+    """
     buckets: dict[str, list[dict]] = {"protein": [], "mrna": [], "crispr": []}
+    rerouted = 0
     for r in rows:
         m = r.get("modality", "protein")
+        seq = str(r.get("sequence", "")).upper().strip()
+        if len(seq) == 20 and all(c in "ACGT" for c in seq) and m != "crispr":
+            m = "crispr"
+            rerouted += 1
         if m in buckets:
             buckets[m].append(r)
+    if rerouted:
+        log.warning(
+            f"[LIFE-BRAIN] re-routed {rerouted} gRNA row(s) out of protein/mRNA "
+            "buckets (misrouted on-chain target_id — see life_submit.js "
+            "JOB_MISMATCH guard)"
+        )
     return buckets
 
 
