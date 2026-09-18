@@ -61,6 +61,7 @@ _OFF_SMILES_LEN     = 562  # u16
 _OFF_AFFINITY       = 564  # f32
 _OFF_SUBMITTED_SLOT = 568  # i64
 _OFF_STATUS         = 576  # u8 — ResultStatus enum
+_OFF_GPU_MODEL      = 907  # [u8; 30] — null-padded GPU name, "" on pre-2026-09 accounts
 _MIN_LEN            = 906  # minimum valid account bytes
 
 _STATUS_CONFIRMED   = 2    # ResultStatus::Confirmed

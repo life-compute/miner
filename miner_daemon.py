@@ -1390,10 +1390,88 @@ def run_boltz2_mrna_scoring(smiles: str, target: dict) -> dict:
         }
 
 
+# ── GPU model identity ────────────────────────────────────────────────────────
+# Captured at submission time and sent on-chain for the per-GPU-model bias
+# correction system. Informational only — never affects scoring, the affinity
+# value, confirm/reject, or reward calculation.
+_GPU_MODEL_MAX_LEN = 30     # mirrors ResultSubmission::MAX_GPU_MODEL_LEN
+_GPU_MODEL_CACHE: dict[int, str] = {}
+
+
+def _detect_gpu_model(gpu_idx: int = 0) -> str:
+    """Return the real GPU model name via torch.cuda.get_device_name().
+
+    Runs torch in a SHORT-LIVED SUBPROCESS on purpose.  miner_daemon spawns its
+    GPU workers with multiprocessing.Process (fork); importing torch and
+    initializing CUDA in the parent before that fork corrupts the CUDA context
+    in every child.  A subprocess keeps CUDA out of this process entirely.
+
+    Honours CUDA_VISIBLE_DEVICES, which gpu_worker() sets to its own physical
+    GPU — so device 0 inside the subprocess is this worker's real GPU.
+
+    Returns "" on any failure (no torch, no CUDA, timeout).  An empty string is
+    submitted as all-zero bytes on-chain and simply means "unknown GPU"; it
+    never blocks a submission.
+    """
+    if gpu_idx in _GPU_MODEL_CACHE:
+        return _GPU_MODEL_CACHE[gpu_idx]
+
+    name = ""
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             "import torch;"
+             "print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if proc.returncode == 0:
+            name = proc.stdout.strip()
+        else:
+            log.warning(f"[gpu-model] torch probe rc={proc.returncode}: "
+                        f"{proc.stderr.strip()[:200]}")
+    except subprocess.TimeoutExpired:
+        log.warning("[gpu-model] torch probe timed out after 60s")
+    except Exception as e:
+        log.warning(f"[gpu-model] torch probe failed: {e}")
+
+    # Fall back to nvidia-smi when torch is unavailable in this interpreter.
+    if not name:
+        try:
+            proc = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if proc.returncode == 0:
+                lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+                # CUDA_VISIBLE_DEVICES already narrows torch's view, but
+                # nvidia-smi always lists every physical GPU — index it.
+                if lines:
+                    name = lines[gpu_idx] if gpu_idx < len(lines) else lines[0]
+                    log.info(f"[gpu-model] torch unavailable — using nvidia-smi: {name}")
+        except Exception as e:
+            log.warning(f"[gpu-model] nvidia-smi fallback failed: {e}")
+
+    # Truncate on a UTF-8 byte boundary (the on-chain field is 30 BYTES).
+    if name:
+        encoded = name.encode("utf-8")
+        if len(encoded) > _GPU_MODEL_MAX_LEN:
+            name = encoded[:_GPU_MODEL_MAX_LEN].decode("utf-8", errors="ignore")
+            log.warning(f"[gpu-model] name exceeds {_GPU_MODEL_MAX_LEN} bytes — "
+                        f"truncated to {name!r}")
+
+    if not name:
+        log.warning("[gpu-model] detection returned nothing — submitting empty "
+                    "gpu_model (bias correction will treat this as unknown)")
+
+    _GPU_MODEL_CACHE[gpu_idx] = name
+    return name
+
+
 # ── On-chain submission ───────────────────────────────────────────────────────
 def submit_on_chain(target_id_num: int, smiles: str, affinity: float,
                     boltz_seed: int = BOLTZ_SEED,
-                    molecule_type: str = "protein") -> dict | None:
+                    molecule_type: str = "protein",
+                    gpu_model: str | None = None) -> dict | None:
     """Submit a result on-chain, trying seq slots 0→1→2 until one is free.
 
     The on-chain program allows MAX_SUBMISSIONS_PER_EPOCH=3 per miner per epoch
@@ -1418,6 +1496,9 @@ def submit_on_chain(target_id_num: int, smiles: str, affinity: float,
             "programId": PROGRAM_ID, "targetIdNum": target_id_num,
             "smiles": smiles, "affinity": affinity, "boltzSeed": boltz_seed,
             "moleculeType": molecule_type,
+            # Real GPU model name, auto-detected. Additive metadata for the
+            # per-GPU-model bias correction system.
+            "gpuModel": _detect_gpu_model() if gpu_model is None else gpu_model,
             "seq": seq,
         }
         try:
@@ -1989,6 +2070,7 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
                     "ts": time.time(), "target_id": tid, "smiles": mol,
                     "boltz_score": boltz_score, "affinity": affinity,
                     "hit": hit, "source": source, "gpu": gpu_idx,
+                    "gpu_model": _detect_gpu_model(),
                 }) + "\n")
         except Exception as _je:
             wlog.debug(f"JSONL write failed: {_je}")
@@ -2823,6 +2905,7 @@ def main():
     #   8  submitted_slot
     # ---
     # 576  status (u8 enum: 0=Pending 1=Validating 2=Confirmed 3=Rejected)
+    # 907  gpu_model ([u8;30] null-padded; "" on pre-2026-09 accounts)
     _STATUS_OFFSET    = 576
     _STATUS_CONFIRMED = 2
     _STATUS_REJECTED  = 3
