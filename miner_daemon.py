@@ -2615,6 +2615,7 @@ def main():
                                 "source":                      source,
                                 "target_type":                 "CRISPR",
                                 "epoch":                       current_epoch,
+                                "gpu_model":                   _detect_gpu_model(),
                             }) + "\n")
                     except Exception as _je:
                         log.debug(f"[CRISPR] JSONL write failed: {_je}")
@@ -3100,6 +3101,7 @@ def main():
                     "affinity":    affinity,
                     "hit":         hit,
                     "source":      source,
+                    "gpu_model":   _detect_gpu_model(),
                 }) + "\n")
         except Exception as _je:
             log.debug(f"JSONL write failed: {_je}")
