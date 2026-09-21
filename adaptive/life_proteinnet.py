@@ -39,7 +39,6 @@ from __future__ import annotations
 import json
 import logging
 import pickle
-import random
 import time
 from pathlib import Path
 from typing import Optional
@@ -408,8 +407,9 @@ def pre_screen(
     Pre-screen a list of SMILES through the ProteinNet model for target_id.
 
     Returns the top_n SMILES sorted by predicted Boltz2 affinity (most negative
-    = strongest binder = best).  Falls back to a random sample of top_n if no
-    model is ready for this target.
+    = strongest binder = best).  Falls back to the caller's existing order if no
+    model is ready: generated candidates arrive sorted descending by ART score,
+    so truncating preserves that ranking (random.sample would destroy it).
 
     Parameters
     ----------
@@ -430,14 +430,13 @@ def pre_screen(
             _models[target_id] = model
 
     if model is None or not smiles_list:
-        # No model yet — return a random sample
-        sampled = random.sample(smiles_list, min(top_n, len(smiles_list)))
-        return sampled
+        # No model yet — preserve the caller's ordering
+        return smiles_list[:top_n]
 
     try:
         import numpy as np
     except ImportError:
-        return random.sample(smiles_list, min(top_n, len(smiles_list)))
+        return smiles_list[:top_n]
 
     scored: list[tuple[float, str]] = []
     for smi in smiles_list:
@@ -451,7 +450,7 @@ def pre_screen(
             pass
 
     if not scored:
-        return random.sample(smiles_list, min(top_n, len(smiles_list)))
+        return smiles_list[:top_n]
 
     # Lower (more negative) predicted affinity = better binder → sort ascending
     scored.sort(key=lambda x: x[0])

@@ -32,7 +32,6 @@ from __future__ import annotations
 import json
 import logging
 import pickle
-import random
 import time
 from pathlib import Path
 from typing import Optional
@@ -47,8 +46,16 @@ _MODEL_DIR   = _OUTPUT_DIR / "crispr_net_models"
 _REPORT_PATH = _MODEL_DIR / "crispr_net_report.json"
 
 # ── Hyper-parameters ──────────────────────────────────────────────────────────
-MIN_ROWS_TO_TRAIN = 15   # minimum real Boltz2 iptm scores per target
+# MIN_ROWS_TO_TRAIN calibrated from KRAS subsampling under corrected (shuffled) CV:
+# at n=15 the same signal-bearing data scores mean R²=-4.05 (range -8.31..+0.58);
+# n=100 is the first size whose worst subsample stays positive (min 0.09).
+MIN_ROWS_TO_TRAIN = 100  # minimum real Boltz2 iptm scores per target
 RETRAIN_EVERY     = 10   # retrain when this many new scores appear
+# MIN_R2_FOR_READY sits in the empty band between the permuted-label null
+# (30 runs, max -0.065) and thin-but-real data (n=100, min +0.09).  Distinct from
+# miner_daemon._CNET_MIN_R2=0.5, which is the stricter "trust for pre-screening"
+# bar: a 0.25-0.5 model is degraded-but-real and should be visible, not absent.
+MIN_R2_FOR_READY  = 0.25 # below this ⇒ model is not distinguishable from noise
 
 # ── In-memory state ───────────────────────────────────────────────────────────
 _models:     dict[str, object] = {}   # target_id → fitted GBR
@@ -254,7 +261,7 @@ def _train_target(target_id: str, rows: list[dict]) -> Optional[dict]:
     """Train a GBR for one CRISPR target. Returns result dict or None on failure."""
     try:
         from sklearn.ensemble import GradientBoostingRegressor
-        from sklearn.model_selection import cross_val_score
+        from sklearn.model_selection import KFold, cross_val_score
         import numpy as np
     except ImportError as e:
         log.debug(f"[CRISPR-NET] sklearn unavailable: {e}")
@@ -291,14 +298,34 @@ def _train_target(target_id: str, rows: list[dict]) -> Optional[dict]:
     )
     model.fit(X_arr, y_arr)
 
-    # R² via k-fold CV (capped at available samples)
+    # R² via 5-fold CV (capped at available samples).
+    # MUST use shuffle=True: life_boltz_scores.jsonl is append-ordered by generation
+    # batch, so sequential folds are distributionally disjoint and produce wildly
+    # negative R² (observed -0.68 on KRAS_CRISPR) that the clamp then hides.
     n_splits = min(5, len(X))
     try:
-        cv_scores = cross_val_score(model, X_arr, y_arr, cv=n_splits, scoring="r2")
+        cv = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+        cv_scores = cross_val_score(model, X_arr, y_arr, cv=cv, scoring="r2")
         r2 = float(np.mean(cv_scores))
     except Exception:
         r2 = float(model.score(X_arr, y_arr))   # train-set R² as fallback
-    r2 = max(-1.0, min(1.0, r2))
+    r2 = max(-1.0, min(1.0, r2))   # clamp: guards pathological folds
+
+    # Sub-threshold R² ⇒ the model is not distinguishable from noise.  Refuse to
+    # publish it as ready and evict any previously-saved pkl, so pre_screen()
+    # cannot silently keep loading it from disk (it has no status check).
+    if r2 < MIN_R2_FOR_READY:
+        log.warning(
+            f"[CRISPR-NET] {target_id} UNRELIABLE model: n={len(X)} R²={r2:.4f} "
+            f"< {MIN_R2_FOR_READY} — refusing to publish (features do not predict iptm)"
+        )
+        _models.pop(target_id, None)
+        try:
+            _model_path(target_id).unlink(missing_ok=True)
+        except Exception as e:
+            log.debug(f"[CRISPR-NET] evict unreliable model {target_id}: {e}")
+        _row_counts[target_id] = len(rows)
+        return {"status": "unreliable", "n": len(X), "r2": round(r2, 4)}
 
     _save_model(target_id, model)
     _models[target_id] = model
@@ -357,6 +384,12 @@ def train_all() -> dict:
             continue
 
         prev_r2 = _report.get("models", {}).get(tid, {}).get("r2")
+
+        # Sub-threshold R²: surface the condition instead of a fake "ready" model.
+        if res.get("status") == "unreliable":
+            results[tid] = res
+            continue
+
         action  = "improved" if (prev_r2 is not None and res["r2"] > prev_r2) else "trained"
         log.info(f"[CRISPR-NET] {tid} model {action}: n={res['n']} R²={res['r2']:.2f}")
 
@@ -389,8 +422,10 @@ def pre_screen(
     Pre-screen a list of gRNA 20-mer sequences through the CRISPR-Net model.
 
     Returns the top_n sequences sorted by predicted Boltz2 iptm score
-    (highest iptm = strongest complex = best).  Falls back to a random
-    sample of top_n if no model is ready for this target.
+    (highest iptm = strongest complex = best).  Falls back to the caller's
+    existing order if no model is ready: generate_grna_candidates() already
+    returns candidates sorted descending by analytical combined score, so
+    truncating preserves that ranking (random.sample would destroy it).
 
     Parameters
     ----------
@@ -409,12 +444,12 @@ def pre_screen(
             _models[target_id] = model
 
     if model is None or not seqs:
-        return random.sample(seqs, min(top_n, len(seqs)))
+        return seqs[:top_n]
 
     try:
         import numpy as np
     except ImportError:
-        return random.sample(seqs, min(top_n, len(seqs)))
+        return seqs[:top_n]
 
     scored: list[tuple[float, str]] = []
     for seq in seqs:
@@ -428,7 +463,7 @@ def pre_screen(
             pass
 
     if not scored:
-        return random.sample(seqs, min(top_n, len(seqs)))
+        return seqs[:top_n]
 
     # Higher predicted iptm = better → sort descending
     scored.sort(key=lambda x: x[0], reverse=True)
