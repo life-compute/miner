@@ -49,5 +49,30 @@ module.exports = {
       watch: false,
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
     },
+    {
+      // pegRNA agreement observer — one-shot, re-run every 30 min.
+      //
+      // Reads output/life_peg_daemon_scores.jsonl (Stage 4) and re-evaluates
+      // each candidate through the stdlib validator path (peg_model.json),
+      // appending the miner-vs-validator delta to output/life_peg_observer.jsonl.
+      //
+      // autorestart:false is load-bearing. The script exits 0 in seconds;
+      // without it PM2 would hot-loop it continuously instead of every 30 min.
+      // Between runs the process sits in `stopped` — that is the healthy
+      // steady state for this entry, not a fault.
+      //
+      // Never add --rebuild here: it truncates and re-observes everything.
+      name: 'life-peg-observer',
+      script: 'scripts/peg_observer.py',
+      interpreter: 'python3',
+      cwd: __dirname,
+      autorestart: false,
+      cron_restart: '*/30 * * * *',
+      env: {
+        CUDA_VISIBLE_DEVICES: '',  // pure-stdlib path; never touches the GPU
+      },
+      watch: false,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+    },
   ],
 };

@@ -49,13 +49,27 @@ proves it per row before any recompute is attempted.
 RESUME
 ------
 Keyed on (ts, rank, model_sha256).  Re-running is safe and cheap: already-observed
-rows are skipped, so the 30-minute cron only pays for genuinely new candidates.
+rows are skipped, so each scheduled run only pays for genuinely new candidates.
+
+SCHEDULING
+----------
+Run under PM2 as the `life-peg-observer` app in `ecosystem.config.js`, with
+`autorestart: false` and `cron_restart: '*/30 * * * *'`.  This is a one-shot
+process: it exits 0 within seconds and PM2 re-launches it every 30 minutes.
+Between runs `pm2 status` shows it as `stopped` — that is the healthy steady
+state for this entry, not a fault.  There is no crontab entry; the PM2
+ecosystem file is the single tracked scheduling surface.
+
+    pm2 start ecosystem.config.js --only life-peg-observer && pm2 save
+    pm2 logs life-peg-observer
 
 USAGE
 -----
     python scripts/peg_observer.py              # observe any new rows
     python scripts/peg_observer.py --rebuild    # discard and re-observe everything
     python scripts/peg_observer.py --status     # summary only, writes nothing
+
+`--rebuild` truncates the observer log; it must never appear in the PM2 entry.
 """
 from __future__ import annotations
 
@@ -236,6 +250,27 @@ def observe_row(row: dict, spec: dict) -> Optional[dict]:
     }
 
 
+def _unobservable_reason(row: dict) -> str:
+    """
+    Why `observe_row` returned None for this row.
+
+    Mirrors the two early-return guards in `observe_row`. Used only to make the
+    skipped-row WARNING actionable: a bare count tells an operator something is
+    wrong but not what, and these rows are never persisted, so the reason has to
+    be recomputed here or it is lost.
+    """
+    missing = [f for f in REQUIRED_FIELDS if row.get(f) is None]
+    if missing:
+        return f"missing fields: {','.join(sorted(missing))}"
+    if _window_for(row) is None:
+        gene = str(row.get("gene") or "")
+        if _load_ref(gene) is None:
+            return f"no reference JSON for gene {gene}"
+        return (f"no window for {gene}/{row.get('hotspot_label')} "
+                f"in reference JSON")
+    return "unknown"
+
+
 def _read_jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -312,12 +347,15 @@ def main() -> int:
 
     new: list[dict] = []
     skipped_unobservable = 0
+    skip_reasons: dict[str, int] = {}
     for row in rows:
         if _key(row) in seen:
             continue
         obs = observe_row(row, spec)
         if obs is None:
             skipped_unobservable += 1
+            reason = _unobservable_reason(row)
+            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
             continue
         new.append(obs)
         seen.add(_key(obs))
@@ -346,6 +384,22 @@ def main() -> int:
     print(f"  unobservable         : {s['unobservable']:,}")
     print(f"  max abs delta        : {s['max_delta']!r}")
     print(f"agreement status       : {s['status']}")
+
+    if skipped_unobservable:
+        # Loud by design. These rows are NOT persisted, so they are silently
+        # re-attempted on every run and never appear in life_peg_observer.jsonl.
+        # A nonzero count means Stage 4 is emitting rows the observer cannot
+        # check at all — coverage is lower than the observation count implies.
+        print()
+        print(f"WARNING: {skipped_unobservable:,} of {len(rows):,} daemon rows "
+              f"are UNOBSERVABLE and were skipped.")
+        print("WARNING: skipped rows are never written to "
+              "output/life_peg_observer.jsonl —")
+        print("WARNING: they are re-attempted every run and contribute no "
+              "agreement signal.")
+        for reason, count in sorted(skip_reasons.items(),
+                                    key=lambda kv: -kv[1]):
+            print(f"WARNING:   {count:,} x {reason}")
 
     if s["status"] == "DIVERGENT":
         print()
