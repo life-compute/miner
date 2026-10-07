@@ -835,7 +835,11 @@ def _push_snapshot_to_github() -> None:
     rel_path = "output/life_brain_snapshot.json"
     cmds = [
         ([git, "add", rel_path],                           "git add"),
-        ([git, "commit", "--allow-empty", "-m",
+        # --only <path> restricts the commit to the snapshot. A pathless
+        # `git commit` commits the WHOLE index, so any work a human had
+        # staged when this job fired was silently absorbed into a chore:
+        # commit (happened once: 6817df2 swallowed two unrelated files).
+        ([git, "commit", "--only", rel_path, "--allow-empty", "-m",
           f"chore: LIFE-BRAIN snapshot {__import__('datetime').datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}"],
                                                            "git commit"),
         ([git, "push", "origin", "HEAD"],                  "git push"),
