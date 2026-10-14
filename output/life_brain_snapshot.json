@@ -4,586 +4,601 @@
       "target_id": 0,
       "target_name": "TP53",
       "modality": "protein",
-      "x": -0.2999,
-      "y": -0.2397,
-      "z": -0.2486,
+      "x": -0.261,
+      "y": -0.4283,
+      "z": 0.0407,
       "row_count": 424,
       "trusted": true,
-      "last_updated": 1792019843.8306534
+      "last_updated": 1792022285.5096908
     },
     {
       "target_id": 4,
       "target_name": "KRAS",
       "modality": "protein",
-      "x": -0.0616,
-      "y": 0.333,
-      "z": -0.2815,
+      "x": -0.008,
+      "y": 0.0122,
+      "z": -0.5011,
       "row_count": 463,
       "trusted": true,
-      "last_updated": 1792019843.8306553
+      "last_updated": 1792022285.5096934
     },
     {
       "target_id": 5,
       "target_name": "BCL2",
       "modality": "protein",
-      "x": -0.0625,
-      "y": 0.0285,
-      "z": -0.2709,
+      "x": 0.6918,
+      "y": -0.4748,
+      "z": 0.1,
       "row_count": 356,
       "trusted": true,
-      "last_updated": 1792019843.8306568
+      "last_updated": 1792022285.509695
     },
     {
       "target_id": 6,
       "target_name": "CDK4",
       "modality": "protein",
-      "x": -0.3263,
-      "y": 0.0275,
-      "z": -0.3599,
-      "row_count": 176,
+      "x": 0.2204,
+      "y": 0.2974,
+      "z": 0.649,
+      "row_count": 177,
       "trusted": true,
-      "last_updated": 1792019843.8306577
+      "last_updated": 1792022285.5096965
     },
     {
       "target_id": 8,
       "target_name": "PDL1",
       "modality": "protein",
-      "x": 0.0639,
-      "y": 0.6145,
-      "z": -0.1139,
-      "row_count": 404,
+      "x": -0.0061,
+      "y": -1.0,
+      "z": 0.1973,
+      "row_count": 405,
       "trusted": true,
-      "last_updated": 1792019843.8306592
+      "last_updated": 1792022285.5096986
     },
     {
       "target_id": 9,
       "target_name": "MDM2",
       "modality": "protein",
-      "x": -0.2645,
-      "y": 0.0474,
-      "z": -0.0953,
-      "row_count": 272,
+      "x": -0.3356,
+      "y": 0.319,
+      "z": -0.3174,
+      "row_count": 273,
       "trusted": true,
-      "last_updated": 1792019843.8306603
+      "last_updated": 1792022285.5097003
     },
     {
       "target_id": 12,
       "target_name": "MYC",
       "modality": "protein",
-      "x": -0.8745,
-      "y": -0.0575,
-      "z": 0.1657,
+      "x": -0.2813,
+      "y": -0.8185,
+      "z": 0.5424,
       "row_count": 203,
       "trusted": true,
-      "last_updated": 1792019843.8306615
+      "last_updated": 1792022285.5097022
     },
     {
       "target_id": 20,
       "target_name": "IDH1",
       "modality": "protein",
-      "x": 0.0169,
-      "y": -0.1759,
-      "z": -0.3489,
+      "x": 0.0361,
+      "y": -0.0796,
+      "z": -0.4256,
       "row_count": 445,
       "trusted": true,
-      "last_updated": 1792019843.830663
+      "last_updated": 1792022285.5097036
     },
     {
       "target_id": 22,
       "target_name": "SMAD4",
       "modality": "protein",
-      "x": 0.0552,
-      "y": -0.2144,
-      "z": -0.0124,
+      "x": -0.1926,
+      "y": 0.0325,
+      "z": -0.3378,
       "row_count": 24,
       "trusted": true,
-      "last_updated": 1792019843.8306642
+      "last_updated": 1792022285.509705
     },
     {
       "target_id": 26,
       "target_name": "ESR1",
       "modality": "protein",
-      "x": -0.3712,
-      "y": 0.1633,
-      "z": 0.3299,
+      "x": -0.1105,
+      "y": -0.1688,
+      "z": -0.1346,
       "row_count": 437,
       "trusted": true,
-      "last_updated": 1792019843.8306656
+      "last_updated": 1792022285.5097065
     },
     {
       "target_id": 27,
       "target_name": "HDAC1",
       "modality": "protein",
-      "x": -0.014,
-      "y": 0.2569,
-      "z": -0.0868,
+      "x": 0.5894,
+      "y": 0.0901,
+      "z": -0.1278,
       "row_count": 361,
       "trusted": true,
-      "last_updated": 1792019843.8306668
+      "last_updated": 1792022285.5097077
     },
     {
       "target_id": 28,
       "target_name": "HDAC2",
       "modality": "protein",
-      "x": 0.2008,
-      "y": -0.1426,
-      "z": -0.0452,
+      "x": 0.2976,
+      "y": -0.4636,
+      "z": -0.2571,
       "row_count": 343,
       "trusted": true,
-      "last_updated": 1792019843.830668
+      "last_updated": 1792022285.5097094
     },
     {
       "target_id": 2000,
       "target_name": "MYC_mRNA",
       "modality": "mrna",
-      "x": -0.1496,
-      "y": -0.4865,
-      "z": 0.2751,
+      "x": 0.6354,
+      "y": 0.2589,
+      "z": -0.2213,
       "row_count": 419,
       "trusted": true,
-      "last_updated": 1792019843.8306694
+      "last_updated": 1792022285.5097108
     },
     {
       "target_id": 2001,
       "target_name": "KRAS_mRNA",
       "modality": "mrna",
-      "x": -0.3416,
-      "y": 0.2067,
-      "z": -0.1924,
+      "x": 0.3582,
+      "y": 0.1747,
+      "z": 0.0904,
       "row_count": 457,
       "trusted": true,
-      "last_updated": 1792019843.8306706
+      "last_updated": 1792022285.5097125
     },
     {
       "target_id": 2002,
       "target_name": "BCL2_mRNA",
       "modality": "mrna",
-      "x": 0.2752,
-      "y": 0.4544,
-      "z": -0.136,
+      "x": -0.5114,
+      "y": 0.4154,
+      "z": 0.5381,
       "row_count": 521,
       "trusted": true,
-      "last_updated": 1792019843.8306718
+      "last_updated": 1792022285.509714
     },
     {
       "target_id": 2003,
       "target_name": "EGFR_mRNA",
       "modality": "mrna",
-      "x": 0.0309,
-      "y": 1.0,
-      "z": -0.0954,
+      "x": 0.2773,
+      "y": 0.4301,
+      "z": 0.0647,
       "row_count": 398,
       "trusted": true,
-      "last_updated": 1792019843.8306735
+      "last_updated": 1792022285.5097153
     },
     {
       "target_id": 2004,
       "target_name": "HER2_mRNA",
       "modality": "mrna",
-      "x": -0.3454,
-      "y": 0.0456,
-      "z": 0.1494,
+      "x": -0.337,
+      "y": 0.0737,
+      "z": 0.1656,
       "row_count": 383,
       "trusted": true,
-      "last_updated": 1792019843.830675
+      "last_updated": 1792022285.5097167
     },
     {
       "target_id": 2005,
       "target_name": "BRAF_mRNA",
       "modality": "mrna",
-      "x": 0.0015,
-      "y": 0.2467,
-      "z": -0.1435,
+      "x": 0.4589,
+      "y": 0.5247,
+      "z": -0.111,
       "row_count": 439,
       "trusted": true,
-      "last_updated": 1792019843.8306763
+      "last_updated": 1792022285.5097182
     },
     {
       "target_id": 2006,
       "target_name": "MDM2_mRNA",
       "modality": "mrna",
-      "x": 0.3219,
-      "y": -0.0853,
-      "z": 0.3888,
+      "x": 0.5956,
+      "y": -0.1903,
+      "z": -0.0374,
       "row_count": 448,
       "trusted": true,
-      "last_updated": 1792019843.8306775
+      "last_updated": 1792022285.5097198
     },
     {
       "target_id": 2007,
       "target_name": "CDK4_mRNA",
       "modality": "mrna",
-      "x": -0.0881,
-      "y": 0.118,
-      "z": 0.0155,
+      "x": -0.0174,
+      "y": 0.4777,
+      "z": -0.6973,
       "row_count": 446,
       "trusted": true,
-      "last_updated": 1792019843.8306787
+      "last_updated": 1792022285.5097215
     },
     {
       "target_id": 2008,
       "target_name": "CCND1_mRNA",
       "modality": "mrna",
-      "x": 0.3205,
-      "y": 0.1103,
-      "z": 0.2762,
+      "x": 0.1022,
+      "y": 0.0604,
+      "z": -0.063,
       "row_count": 447,
       "trusted": true,
-      "last_updated": 1792019843.8306801
+      "last_updated": 1792022285.509723
     },
     {
       "target_id": 2009,
       "target_name": "SURVIVIN_mRNA",
       "modality": "mrna",
-      "x": -0.2693,
-      "y": 0.334,
-      "z": -0.3634,
+      "x": -0.0358,
+      "y": -0.1548,
+      "z": 0.1538,
       "row_count": 397,
       "trusted": true,
-      "last_updated": 1792019843.8306813
+      "last_updated": 1792022285.5097244
     },
     {
       "target_id": 2010,
       "target_name": "PDL1_mRNA",
       "modality": "mrna",
-      "x": -0.165,
-      "y": 0.2579,
-      "z": -0.1658,
-      "row_count": 422,
+      "x": -0.0949,
+      "y": -0.1615,
+      "z": 0.0482,
+      "row_count": 423,
       "trusted": true,
-      "last_updated": 1792019843.8306825
+      "last_updated": 1792022285.5097258
     },
     {
       "target_id": 2011,
       "target_name": "VEGF_mRNA",
       "modality": "mrna",
-      "x": -0.3463,
-      "y": -0.2136,
-      "z": -0.2567,
-      "row_count": 457,
+      "x": -0.4036,
+      "y": -0.4489,
+      "z": -0.0608,
+      "row_count": 458,
       "trusted": true,
-      "last_updated": 1792019843.830684
+      "last_updated": 1792022285.5097272
     },
     {
       "target_id": 2012,
       "target_name": "HIF1A_mRNA",
       "modality": "mrna",
-      "x": -0.0347,
-      "y": -0.221,
-      "z": -0.1817,
-      "row_count": 157,
+      "x": 0.1648,
+      "y": -0.2112,
+      "z": -0.5137,
+      "row_count": 158,
       "trusted": true,
-      "last_updated": 1792019843.830685
+      "last_updated": 1792022285.5097284
     },
     {
       "target_id": 2013,
       "target_name": "IL6_mRNA",
       "modality": "mrna",
-      "x": -0.4236,
-      "y": 0.4569,
-      "z": 0.4717,
-      "row_count": 437,
+      "x": -0.3979,
+      "y": -0.108,
+      "z": -0.0083,
+      "row_count": 438,
       "trusted": true,
-      "last_updated": 1792019843.830686
+      "last_updated": 1792022285.5097299
     },
     {
       "target_id": 2014,
       "target_name": "TNF_mRNA",
       "modality": "mrna",
-      "x": -0.3198,
-      "y": 0.0004,
-      "z": -0.1964,
-      "row_count": 487,
+      "x": 0.5505,
+      "y": 0.8749,
+      "z": 0.2795,
+      "row_count": 488,
       "trusted": true,
-      "last_updated": 1792019843.8306875
+      "last_updated": 1792022285.509731
     },
     {
       "target_id": 2015,
       "target_name": "TGFb1_mRNA",
       "modality": "mrna",
-      "x": 0.1268,
-      "y": -0.0993,
-      "z": -0.0963,
-      "row_count": 430,
+      "x": -0.1261,
+      "y": -0.0636,
+      "z": 0.4527,
+      "row_count": 431,
       "trusted": true,
-      "last_updated": 1792019843.830689
+      "last_updated": 1792022285.5097327
     },
     {
       "target_id": 2016,
       "target_name": "CSF1R_mRNA",
       "modality": "mrna",
-      "x": -0.5931,
-      "y": 0.0116,
-      "z": -0.1694,
-      "row_count": 409,
+      "x": 0.0657,
+      "y": 0.5461,
+      "z": 0.156,
+      "row_count": 410,
       "trusted": true,
-      "last_updated": 1792019843.8306904
+      "last_updated": 1792022285.509734
     },
     {
       "target_id": 2017,
       "target_name": "CCL2_mRNA",
       "modality": "mrna",
-      "x": 0.8622,
-      "y": -0.1595,
-      "z": 0.0963,
+      "x": -0.5111,
+      "y": 0.3159,
+      "z": -0.5624,
       "row_count": 297,
       "trusted": true,
-      "last_updated": 1792019843.8306913
+      "last_updated": 1792022285.5097353
     },
     {
       "target_id": 2018,
       "target_name": "CXCL12_mRNA",
       "modality": "mrna",
-      "x": 0.4633,
-      "y": -0.3415,
-      "z": -0.3393,
-      "row_count": 425,
+      "x": 0.2721,
+      "y": 0.3706,
+      "z": 0.1906,
+      "row_count": 426,
       "trusted": true,
-      "last_updated": 1792019843.8306925
+      "last_updated": 1792022285.5097368
     },
     {
       "target_id": 2019,
       "target_name": "MMP9_mRNA",
       "modality": "mrna",
-      "x": -0.442,
-      "y": -0.2879,
-      "z": -0.3732,
-      "row_count": 418,
+      "x": 0.019,
+      "y": 0.0428,
+      "z": 0.705,
+      "row_count": 419,
       "trusted": true,
-      "last_updated": 1792019843.830694
+      "last_updated": 1792022285.5097384
     },
     {
       "target_id": 2020,
       "target_name": "LDHA_mRNA",
       "modality": "mrna",
-      "x": -0.0822,
-      "y": -0.1051,
-      "z": -0.0077,
+      "x": -0.0723,
+      "y": 0.1685,
+      "z": -0.489,
       "row_count": 173,
       "trusted": true,
-      "last_updated": 1792019843.8306954
+      "last_updated": 1792022285.5097399
     },
     {
       "target_id": 2021,
       "target_name": "PKM2_mRNA",
       "modality": "mrna",
-      "x": 0.0373,
-      "y": 0.2318,
-      "z": -0.0717,
+      "x": 0.3721,
+      "y": -0.3097,
+      "z": -0.036,
       "row_count": 379,
       "trusted": true,
-      "last_updated": 1792019843.8306968
+      "last_updated": 1792022285.5097413
     },
     {
       "target_id": 2022,
       "target_name": "GLUT1_mRNA",
       "modality": "mrna",
-      "x": -0.0604,
-      "y": 0.106,
-      "z": -0.0722,
+      "x": -0.1051,
+      "y": -0.0962,
+      "z": -0.2792,
       "row_count": 368,
       "trusted": true,
-      "last_updated": 1792019843.830698
+      "last_updated": 1792022285.5097427
     },
     {
       "target_id": 2023,
       "target_name": "HK2_mRNA",
       "modality": "mrna",
-      "x": 0.1816,
-      "y": 0.2061,
-      "z": -0.0893,
+      "x": 0.8574,
+      "y": -0.6093,
+      "z": -0.1675,
       "row_count": 430,
       "trusted": true,
-      "last_updated": 1792019843.8306992
+      "last_updated": 1792022285.5097444
     },
     {
       "target_id": 2024,
       "target_name": "FASN_mRNA",
       "modality": "mrna",
-      "x": -0.4213,
-      "y": -0.1108,
-      "z": -0.0682,
+      "x": 0.2729,
+      "y": 0.225,
+      "z": 0.1045,
       "row_count": 419,
       "trusted": true,
-      "last_updated": 1792019843.8307006
+      "last_updated": 1792022285.5097458
     },
     {
       "target_id": 2025,
       "target_name": "TERT_mRNA",
       "modality": "mrna",
-      "x": 0.3134,
-      "y": 0.0831,
-      "z": 0.3725,
+      "x": -0.0306,
+      "y": -0.2246,
+      "z": -0.2339,
       "row_count": 418,
       "trusted": true,
-      "last_updated": 1792019843.830702
+      "last_updated": 1792022285.5097475
     },
     {
       "target_id": 2026,
       "target_name": "PARP1_mRNA",
       "modality": "mrna",
-      "x": 0.2879,
-      "y": 0.3389,
-      "z": -0.3378,
+      "x": -0.1629,
+      "y": -0.1103,
+      "z": 0.4582,
       "row_count": 397,
       "trusted": true,
-      "last_updated": 1792019843.8307035
+      "last_updated": 1792022285.5097487
     },
     {
       "target_id": 2027,
       "target_name": "RAD51_mRNA",
       "modality": "mrna",
-      "x": -0.2707,
-      "y": 0.417,
-      "z": 0.2331,
+      "x": -0.4366,
+      "y": 0.3365,
+      "z": 0.0421,
       "row_count": 414,
       "trusted": true,
-      "last_updated": 1792019843.8307052
+      "last_updated": 1792022285.5097504
     },
     {
       "target_id": 2028,
       "target_name": "BRCA2_mRNA",
       "modality": "mrna",
-      "x": 0.1089,
-      "y": -0.0402,
-      "z": -0.1945,
+      "x": 0.0426,
+      "y": 0.3095,
+      "z": -0.2374,
       "row_count": 356,
       "trusted": true,
-      "last_updated": 1792019843.8307064
+      "last_updated": 1792022285.5097518
     },
     {
       "target_id": 2029,
       "target_name": "ATM_mRNA",
       "modality": "mrna",
-      "x": -0.2944,
-      "y": -0.1325,
-      "z": 0.4143,
+      "x": -0.174,
+      "y": -0.194,
+      "z": 0.4577,
       "row_count": 385,
       "trusted": true,
-      "last_updated": 1792019843.8307083
+      "last_updated": 1792022285.5097532
     },
     {
       "target_id": 3000,
       "target_name": "TP53 (CRISPR)",
       "modality": "crispr",
-      "x": 0.016,
-      "y": -0.003,
-      "z": 0.2686,
-      "row_count": 1463,
+      "x": 0.4326,
+      "y": -0.1998,
+      "z": -0.3004,
+      "row_count": 1464,
       "trusted": true,
-      "last_updated": 1792019843.8307097
+      "last_updated": 1792022285.5097547
     },
     {
       "target_id": 3001,
       "target_name": "KRAS (CRISPR)",
       "modality": "crispr",
-      "x": 0.4826,
-      "y": -0.0387,
-      "z": -0.3545,
-      "row_count": 1627,
+      "x": 0.6147,
+      "y": 0.3652,
+      "z": 0.3674,
+      "row_count": 1628,
       "trusted": true,
-      "last_updated": 1792019843.8307111
+      "last_updated": 1792022285.509756
     },
     {
       "target_id": 3002,
       "target_name": "BCL2 (CRISPR)",
       "modality": "crispr",
-      "x": 0.2295,
-      "y": -0.0357,
-      "z": -0.1017,
-      "row_count": 1686,
+      "x": 0.0465,
+      "y": 0.158,
+      "z": 0.3711,
+      "row_count": 1687,
       "trusted": true,
-      "last_updated": 1792019843.8307126
+      "last_updated": 1792022285.5097575
     },
     {
       "target_id": 3003,
       "target_name": "MYC (CRISPR)",
       "modality": "crispr",
-      "x": 0.2256,
-      "y": -0.1657,
-      "z": -0.0673,
-      "row_count": 1352,
+      "x": -0.2917,
+      "y": 0.2955,
+      "z": -0.1965,
+      "row_count": 1354,
       "trusted": true,
-      "last_updated": 1792019843.8307135
+      "last_updated": 1792022285.509759
     },
     {
       "target_id": 3004,
       "target_name": "EGFR (CRISPR)",
       "modality": "crispr",
-      "x": 0.102,
-      "y": -0.1642,
-      "z": -0.3968,
+      "x": 0.0198,
+      "y": -0.0474,
+      "z": -0.0913,
       "row_count": 1726,
       "trusted": true,
-      "last_updated": 1792019843.830715
+      "last_updated": 1792022285.5097606
     },
     {
       "target_id": 3005,
       "target_name": "HER2 (CRISPR)",
       "modality": "crispr",
-      "x": -0.4463,
-      "y": -0.3338,
-      "z": 0.0577,
-      "row_count": 1699,
+      "x": 0.4158,
+      "y": -0.1696,
+      "z": 0.0502,
+      "row_count": 1700,
       "trusted": true,
-      "last_updated": 1792019843.8307164
+      "last_updated": 1792022285.509762
     },
     {
       "target_id": 3006,
       "target_name": "BRCA1 (CRISPR)",
       "modality": "crispr",
-      "x": 0.1209,
-      "y": 0.2116,
-      "z": -0.2179,
-      "row_count": 1743,
+      "x": 0.1705,
+      "y": -0.0795,
+      "z": 0.1492,
+      "row_count": 1744,
       "trusted": true,
-      "last_updated": 1792019843.8307173
+      "last_updated": 1792022285.5097635
     },
     {
       "target_id": 3007,
       "target_name": "PDL1 (CRISPR)",
       "modality": "crispr",
-      "x": 0.0178,
-      "y": -0.1615,
-      "z": 0.1608,
-      "row_count": 1685,
+      "x": -0.2801,
+      "y": 0.4034,
+      "z": 0.3368,
+      "row_count": 1686,
       "trusted": true,
-      "last_updated": 1792019843.830719
+      "last_updated": 1792022285.5097651
     },
     {
       "target_id": 3008,
       "target_name": "TERT (CRISPR)",
       "modality": "crispr",
-      "x": 0.166,
-      "y": 0.1557,
-      "z": 0.5809,
-      "row_count": 1403,
+      "x": 0.7085,
+      "y": -0.1276,
+      "z": 0.0358,
+      "row_count": 1404,
       "trusted": true,
-      "last_updated": 1792019843.83072
+      "last_updated": 1792022285.5097666
     },
     {
       "target_id": 3009,
       "target_name": "CDK4 (CRISPR)",
       "modality": "crispr",
-      "x": -0.0625,
-      "y": -0.4073,
-      "z": -0.0196,
-      "row_count": 1400,
+      "x": -0.3739,
+      "y": -0.1862,
+      "z": -0.3167,
+      "row_count": 1401,
       "trusted": true,
-      "last_updated": 1792019843.8307214
+      "last_updated": 1792022285.509768
     }
   ],
   "edges": [
     {
-      "target_a": 12,
-      "target_b": 2016,
-      "similarity": 0.7134
+      "target_a": 4,
+      "target_b": 2020,
+      "similarity": 0.7072
+    },
+    {
+      "target_a": 5,
+      "target_b": 2023,
+      "similarity": 0.7449
+    },
+    {
+      "target_a": 8,
+      "target_b": 12,
+      "similarity": 0.7389
+    },
+    {
+      "target_a": 2014,
+      "target_b": 3001,
+      "similarity": 0.7551
     }
   ],
   "meta": {
-    "total_rows_ingested": 31725,
+    "total_rows_ingested": 31747,
     "unique_miner_count": 2,
-    "last_trained": 1792019843.835754,
+    "last_trained": 1792022285.5211036,
     "branch_trust": {
       "protein": true,
       "mrna": true,
