@@ -1451,49 +1451,40 @@ def _detect_gpu_model(gpu_idx: int = 0) -> str:
     if gpu_idx in _GPU_MODEL_CACHE:
         return _GPU_MODEL_CACHE[gpu_idx]
 
-    name = ""
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c",
-             "import torch;"
-             "print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"],
-            capture_output=True, text=True, timeout=60,
-        )
-        if proc.returncode == 0:
-            name = proc.stdout.strip()
-        else:
-            log.warning(f"[gpu-model] torch probe rc={proc.returncode}: "
-                        f"{proc.stderr.strip()[:200]}")
-    except subprocess.TimeoutExpired:
-        log.warning("[gpu-model] torch probe timed out after 60s")
-    except Exception as e:
-        log.warning(f"[gpu-model] torch probe failed: {e}")
-
-    # Fall back to nvidia-smi when torch is unavailable in this interpreter.
-    if not name:
+    def _probe(label: str, argv: list[str], timeout: int) -> list[str]:
+        """Run argv, return non-empty stdout lines ([] on any failure)."""
         try:
-            proc = subprocess.run(
-                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-                capture_output=True, text=True, timeout=30,
-            )
-            if proc.returncode == 0:
-                lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
-                # CUDA_VISIBLE_DEVICES already narrows torch's view, but
-                # nvidia-smi always lists every physical GPU — index it.
-                if lines:
-                    name = lines[gpu_idx] if gpu_idx < len(lines) else lines[0]
-                    log.info(f"[gpu-model] torch unavailable — using nvidia-smi: {name}")
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+            if proc.returncode:
+                log.warning(f"[gpu-model] {label} rc={proc.returncode}: "
+                            f"{proc.stderr.strip()[:200]}")
+                return []
+            return [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
         except Exception as e:
-            log.warning(f"[gpu-model] nvidia-smi fallback failed: {e}")
+            log.warning(f"[gpu-model] {label} failed: {e}")
+            return []
 
-    # Truncate on a UTF-8 byte boundary (the on-chain field is 30 BYTES).
-    if name:
-        encoded = name.encode("utf-8")
-        if len(encoded) > _GPU_MODEL_MAX_LEN:
-            name = encoded[:_GPU_MODEL_MAX_LEN].decode("utf-8", errors="ignore")
-            log.warning(f"[gpu-model] name exceeds {_GPU_MODEL_MAX_LEN} bytes — "
-                        f"truncated to {name!r}")
+    # torch first (the requested source of truth); nvidia-smi only as a fallback
+    # for interpreters without torch. nvidia-smi lists every physical GPU, so
+    # index it — torch already sees just ours via CUDA_VISIBLE_DEVICES.
+    lines = _probe("torch probe", [
+        sys.executable, "-c",
+        "import torch;"
+        "print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')",
+    ], 60)
+    name = lines[0] if lines else ""
+    if not name:
+        lines = _probe("nvidia-smi fallback",
+                       ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], 30)
+        name = lines[min(gpu_idx, len(lines) - 1)] if lines else ""
+        if name:
+            log.info(f"[gpu-model] torch unavailable — using nvidia-smi: {name}")
 
+    # The on-chain field is 30 BYTES, so truncate on a UTF-8 boundary.
+    if len(name.encode()) > _GPU_MODEL_MAX_LEN:
+        name = name.encode()[:_GPU_MODEL_MAX_LEN].decode(errors="ignore")
+        log.warning(f"[gpu-model] name exceeds {_GPU_MODEL_MAX_LEN} bytes — "
+                    f"truncated to {name!r}")
     if not name:
         log.warning("[gpu-model] detection returned nothing — submitting empty "
                     "gpu_model (bias correction will treat this as unknown)")
@@ -1526,7 +1517,8 @@ def submit_on_chain(target_id_num: int, smiles: str, affinity: float,
     """
     for seq in range(3):  # slots 0, 1, 2
         args = {
-            "rpc": SOLANA_RPC, "authKeypair": AUTH_KEYPAIR,
+            # rpc is NOT passed here — life_submit.js reads ~/.helius.env directly
+            "authKeypair": AUTH_KEYPAIR,
             "minerKeypair": MINER_KEYPAIR, "idlPath": str(IDL_PATH),
             "programId": PROGRAM_ID, "targetIdNum": target_id_num,
             "smiles": smiles, "affinity": affinity, "boltzSeed": boltz_seed,
