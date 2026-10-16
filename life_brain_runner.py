@@ -151,11 +151,43 @@ def main() -> None:
         pass
 
     # ── Load config from environment ──────────────────────────────────────────
-    solana_rpc = os.environ.get("SOLANA_RPC", "https://api.devnet.solana.com")
+    def _read_helius_key_brain() -> "str | None":
+        p = os.path.expanduser("~/.helius.env")
+        try:
+            with open(p) as _f:
+                for _line in _f:
+                    if _line.startswith("HELIUS_API_KEY="):
+                        return _line.split("=", 1)[1].strip()
+        except OSError:
+            pass
+        return None
+
+    _rpc_env = os.environ.get("SOLANA_RPC", "")
+    if _rpc_env:
+        solana_rpc = _rpc_env
+        _rpc_label = "RPC: env-override"
+        _rpc_warn  = False
+    else:
+        _bkey = _read_helius_key_brain()
+        if _bkey:
+            solana_rpc = f"https://devnet.helius-rpc.com/?api-key={_bkey}"
+            _rpc_label = "RPC: helius-devnet"
+            _rpc_warn  = False
+        else:
+            solana_rpc = "https://api.devnet.solana.com"
+            _rpc_label = "RPC: public-devnet (no key file)"
+            _rpc_warn  = True
+        del _bkey
+    del _rpc_env
+
+    if _rpc_warn:
+        log.warning("[LIFE-BRAIN] ~/.helius.env missing or unreadable — %s", _rpc_label)
+    else:
+        log.info("[LIFE-BRAIN] %s", _rpc_label)
+
     work_dir   = os.path.dirname(os.path.abspath(__file__))
     snapshot_path = os.path.join(work_dir, "output", "life_brain_snapshot.json")
 
-    log.info(f"[LIFE-BRAIN] Solana RPC: {solana_rpc}")
     log.info(f"[LIFE-BRAIN] Work dir:   {work_dir}")
 
     # ── Start ingestion background thread ─────────────────────────────────────

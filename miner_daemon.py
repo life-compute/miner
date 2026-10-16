@@ -281,8 +281,39 @@ except Exception as _pne:
 def _env(key, default=""):
     return os.environ.get(key, default)
 
+
+def _read_helius_key() -> "str | None":
+    """Read HELIUS_API_KEY from ~/.helius.env without touching os.environ."""
+    p = os.path.expanduser("~/.helius.env")
+    try:
+        with open(p) as _f:
+            for _line in _f:
+                if _line.startswith("HELIUS_API_KEY="):
+                    return _line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+
 PROGRAM_ID    = _env("PROGRAM_ID",    "74RHjg1zYgN9zuVykde4SK2ERiRgNkouATW9MmQDLRWf")
-SOLANA_RPC    = _env("SOLANA_RPC",    "https://api.devnet.solana.com")
+# ── RPC endpoint resolution: env-var wins; falls back to ~/.helius.env; then public devnet ──
+_SOLANA_RPC_ENV = _env("SOLANA_RPC", "")
+if _SOLANA_RPC_ENV:
+    SOLANA_RPC  = _SOLANA_RPC_ENV
+    _RPC_SOURCE = "RPC: env-override"
+    _RPC_WARN   = False
+else:
+    _hkey = _read_helius_key()
+    if _hkey:
+        SOLANA_RPC  = f"https://devnet.helius-rpc.com/?api-key={_hkey}"
+        _RPC_SOURCE = "RPC: helius-devnet"
+        _RPC_WARN   = False
+    else:
+        SOLANA_RPC  = "https://api.devnet.solana.com"
+        _RPC_SOURCE = "RPC: public-devnet (no key file)"
+        _RPC_WARN   = True
+    del _hkey
+del _SOLANA_RPC_ENV
 AUTH_KEYPAIR  = _env("SOLANA_KEYPAIR","/mnt/minos-drive/life-compute-miner/dev-keypair.json")
 MINER_KEYPAIR = _env("MINER_KEYPAIR", "/mnt/minos-drive/life-compute-miner/miner-keypair.json")
 TARGETS_URL   = _env("TARGETS_URL",   "https://raw.githubusercontent.com/life-compute/targets/master/targets.json")
@@ -436,6 +467,10 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("life-miner")
+if _RPC_WARN:
+    log.warning("[MINER] ~/.helius.env missing or unreadable — %s", _RPC_SOURCE)
+else:
+    log.info("[MINER] %s", _RPC_SOURCE)
 
 # ── ZINC15 random sampling (default strategy) ─────────────────────────────────
 ZINC15_FRAGMENTS = WORK_DIR / "data" / "zinc15_fragments.smi"
