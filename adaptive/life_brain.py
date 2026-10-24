@@ -782,31 +782,75 @@ def export_snapshot(model, report: dict, rows: list[dict]) -> None:
         # Build edges: cosine similarity between trusted embeddings only
         trusted_idx = [i for i, tid in enumerate(tid_list) if branch_trust.get(unique_targets[tid]["modality"], False)]
         edges = []
+        near_edges = []
         if len(trusted_idx) >= 2:
             trusted_embeds = embeds[trusted_idx]
             norms = np.linalg.norm(trusted_embeds, axis=1, keepdims=True)
             norms = np.where(norms == 0, 1.0, norms)
             normed = trusted_embeds / norms
-            for ii in range(len(trusted_idx)):
-                for jj in range(ii + 1, len(trusted_idx)):
-                    sim = float(np.dot(normed[ii], normed[jj]))
+
+            # Full pairwise similarity matrix (trusted nodes only)
+            n_t = len(trusted_idx)
+            sim_matrix = np.dot(normed, normed.T)   # (n_t, n_t)
+
+            # edges: pairs with cosine sim >= EDGE_SIMILARITY_THRESHOLD (unchanged)
+            edge_pairs = set()
+            for ii in range(n_t):
+                for jj in range(ii + 1, n_t):
+                    sim = float(sim_matrix[ii, jj])
                     if sim >= EDGE_SIMILARITY_THRESHOLD:
+                        ta = tid_list[trusted_idx[ii]]
+                        tb = tid_list[trusted_idx[jj]]
                         edges.append({
-                            "target_a":  tid_list[trusted_idx[ii]],
-                            "target_b":  tid_list[trusted_idx[jj]],
+                            "target_a":  ta,
+                            "target_b":  tb,
                             "similarity": round(sim, 4),
                         })
+                        edge_pairs.add((min(ta, tb), max(ta, tb)))
+
+            # near_edges: for each trusted target, its 3 most similar other trusted
+            # targets, each pair listed once, pairs already in edges excluded.
+            near_pairs = set()
+            for ii in range(n_t):
+                ta = tid_list[trusted_idx[ii]]
+                # Collect all other trusted targets sorted by descending similarity
+                sims_for_ii = [
+                    (float(sim_matrix[ii, jj]), tid_list[trusted_idx[jj]])
+                    for jj in range(n_t) if jj != ii
+                ]
+                sims_for_ii.sort(key=lambda x: -x[0])
+                count = 0
+                for sim_val, tb in sims_for_ii:
+                    if count >= 3:
+                        break
+                    pair_key = (min(ta, tb), max(ta, tb))
+                    if pair_key in edge_pairs or pair_key in near_pairs:
+                        continue
+                    near_pairs.add(pair_key)
+                    near_edges.append({
+                        "target_a":  ta,
+                        "target_b":  tb,
+                        "similarity": round(sim_val, 4),
+                    })
+                    count += 1
 
         unique_miners = len({r.get("miner_wallet", "") for r in rows if r.get("miner_wallet")})
 
         snapshot = {
             "nodes": nodes,
             "edges": edges,
+            "near_edges": near_edges,
             "meta": {
                 "total_rows_ingested": len(rows),
                 "unique_miner_count":  unique_miners,
                 "last_trained":        time.time(),
                 "branch_trust":        branch_trust,
+                "edge_rule": (
+                    "edges are links where the learned descriptions of two targets "
+                    "have cosine similarity of at least 0.70; "
+                    "near_edges are each target's 3 most similar targets "
+                    "(pairs already in edges are excluded)"
+                ),
             },
         }
         _SNAPSHOT_PATH.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
@@ -869,9 +913,15 @@ def _push_snapshot_to_github() -> None:
 
 def _write_empty_snapshot(report: dict) -> None:
     snap = {
-        "nodes": [], "edges": [],
+        "nodes": [], "edges": [], "near_edges": [],
         "meta": {"total_rows_ingested": 0, "unique_miner_count": 0,
-                 "last_trained": None, "branch_trust": {}},
+                 "last_trained": None, "branch_trust": {},
+                 "edge_rule": (
+                     "edges are links where the learned descriptions of two targets "
+                     "have cosine similarity of at least 0.70; "
+                     "near_edges are each target's 3 most similar targets "
+                     "(pairs already in edges are excluded)"
+                 )},
     }
     try:
         _SNAPSHOT_PATH.write_text(json.dumps(snap, indent=2), encoding="utf-8")
