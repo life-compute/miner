@@ -21,8 +21,10 @@ TIMEOUT := 180
 # KNOWN_FAILING: verifiers red for reasons unrelated to the current change.
 # They still RUN and still report — this list only keeps `make test` honest
 # about what is new breakage versus inherited. Empty it as they get fixed.
-# Currently empty: the suite is fully green, so any red is new breakage.
-KNOWN_FAILING :=
+# verify_proteinnet_fixes: 30/40 pass; 10 checks fail due to insufficient
+# per-target row counts in the live dataset (sklearn train_test_split on
+# n_samples=0). Pre-existing on stage4-pegrna-daemon; unrelated to feat/brain-knn.
+KNOWN_FAILING := scripts/verify_proteinnet_fixes.py
 
 .PHONY: test test-offline verify-nft check publish list
 
