@@ -323,6 +323,16 @@ TARGET_REFRESH       = 300      # seconds between target list refreshes
 REF_RESCREEN_INTERVAL = 4 * 3600.0  # screen each ref compound at most once per 4 h
 MRNA_SCHEDULE_WEIGHT  = 2           # mRNA picks per protein pick (2 → P M M, 3 → P M M M)
 
+# ── COORDINATOR_MODE ──────────────────────────────────────────────────────────
+# When True: fetch work via GET /work (signed), draw molecules from lease shards,
+# check pinned hashes, score with the lease's scorer_profile only, POST results
+# to the coordinator with candidate/shard/row/miner_gpu_model/scorer_profile_hash,
+# and make NO chain reads (getProgramAccounts, fetch_network_stats) in the hot path.
+# Dashboard reads /wallets/{wallet}/summary instead of on-chain state.
+# When False (default): original behaviour — targets.json, on-chain submission, chain reads.
+_COORDINATOR_MODE_ENV = _env("COORDINATOR_MODE", "").strip().lower()
+COORDINATOR_MODE: bool = _COORDINATOR_MODE_ENV in ("1", "true", "yes", "on")
+
 # ── Multi-GPU configuration ───────────────────────────────────────────────────
 def _detect_gpu_count() -> int:
     """Return number of NVIDIA GPUs visible via nvidia-smi, or 1 on failure."""
@@ -550,6 +560,9 @@ def _pick_molecule(target: dict, sub_memory, best_smiles: list[str]) -> tuple[st
     """
     tid = target.get("id", "").upper()
     uid = target.get("uniprot_id", tid)
+    # protein_sequence from targets.json is used ONLY for the size flag below.
+    # It is NOT passed to Boltz — the sequence for Boltz comes from the MSA file
+    # via _sequence_from_msa() in run_boltz2_scoring().
     seq = target.get("protein_sequence", "")
     is_large_protein = len(seq) > 800   # APC=2843aa, BRCA1=1863aa, SMAD4=552aa
 
@@ -700,6 +713,11 @@ def _rpc(method: str, params: list) -> object:
         return None
 
 def _get_accounts(disc: bytes) -> list[bytes]:
+    if COORDINATOR_MODE:
+        # In COORDINATOR_MODE the miner never reads the chain — all work
+        # comes from the coordinator's signed lease.
+        log.debug("[RPC] _get_accounts skipped (COORDINATOR_MODE=true)")
+        return []
     import base64 as _b64
     result = _rpc("getProgramAccounts", [
         PROGRAM_ID,
@@ -796,17 +814,52 @@ def _count_active_miners() -> int | None:
 def fetch_network_stats() -> dict:
     """Return global network stats for the dashboard.
 
-    total_miners is sourced from total_miners_registered in the NetworkConfig PDA —
-    the authoritative on-chain counter incremented by register_miner.  This avoids
-    counting test/ghost MinerAccount PDAs created during development.
+    In COORDINATOR_MODE: fetches /wallets/{wallet}/summary from the coordinator
+    (public, unauthenticated) and returns a summary dict compatible with the
+    dashboard's "global" field.  No chain reads.
 
-    molecules_screened and targets_solved are still aggregated from individual
-    on-chain accounts.
+    In normal mode: total_miners is sourced from total_miners_registered in the
+    NetworkConfig PDA — the authoritative on-chain counter incremented by
+    register_miner.  molecules_screened and targets_solved are still aggregated
+    from individual on-chain accounts.
     """
     global _NETWORK_STATS_CACHE
     if _NETWORK_STATS_CACHE.get("_ts", 0) + _NETWORK_STATS_TTL > time.time():
         return _NETWORK_STATS_CACHE
-    result: dict = {"total_miners": None, "molecules_screened": None, "targets_solved": None}
+
+    if COORDINATOR_MODE:
+        # Read from the coordinator's public wallet summary endpoint (no auth needed
+        # for the summary of your own wallet — it is publicly accessible).
+        result: dict = {"total_miners": None, "molecules_screened": None,
+                        "targets_solved": None, "source": "coordinator"}
+        try:
+            coord_url = os.environ.get("COORDINATOR_URL", "http://localhost:8787").rstrip("/")
+            # Derive wallet address from miner keypair for the summary URL
+            try:
+                from coordinator.auth import MinerKeypair, b58encode
+                _kp_data = json.loads(Path(MINER_KEYPAIR).read_bytes())
+                if isinstance(_kp_data, list) and len(_kp_data) == 64:
+                    _wallet = b58encode(bytes(_kp_data[32:]))
+                else:
+                    _wallet = None
+            except Exception:
+                _wallet = None
+            if _wallet:
+                summary_url = f"{coord_url}/wallets/{_wallet}/summary"
+                with urllib.request.urlopen(summary_url, timeout=5) as _r:
+                    _summary = json.loads(_r.read())
+                result.update({
+                    "molecules_screened": _summary.get("accepted_results"),
+                    "wallet_summary":     _summary,
+                })
+        except Exception as _e:
+            log.debug(f"[NETWORK] coordinator wallet summary failed: {_e}")
+        result["_ts"] = time.time()
+        _NETWORK_STATS_CACHE = result
+        return result
+
+    # ── Normal (non-coordinator) path: on-chain reads ─────────────────────────
+    result = {"total_miners": None, "molecules_screened": None, "targets_solved": None}
     try:
         # ── Miner count: read from NetworkConfig, not from PDA enumeration ──
         registered = _get_network_config_miners_registered()
@@ -1060,12 +1113,23 @@ def run_boltz2_scoring(smiles: str, target: dict) -> dict:
     uniprot   = target["uniprot_id"]
     target_id = target["id"]
     msa_path  = _msa_path_for(uniprot)
-    sequence  = _sequence_from_msa(msa_path) or target["protein_sequence"]
+    sequence  = _sequence_from_msa(msa_path)
+    if sequence is None:
+        # Alignment read failed (msa_path empty or unreadable).
+        # SAFETY: do NOT fall back to protein_sequence from targets.json —
+        # that sequence is unverified and must never reach Boltz.
+        log.warning(
+            f"  [Boltz2] {target_id}: MSA read failed (msa_path={msa_path!r}), "
+            "skipping target — will not use protein_sequence from targets.json"
+        )
+        return {"boltz_score": None, "model": "boltz2-gpu",
+                "msa_used": msa_path,
+                "error": "MSA unavailable; targets.json fallback refused"}
     if msa_path != "empty":
-        msa_len, tgt_len = len(sequence), len(target.get("protein_sequence", ""))
-        if msa_len != tgt_len:
+        tgt_len = len(target.get("protein_sequence", ""))
+        if len(sequence) != tgt_len:
             log.info(f"  [MSA] Using sequence from {Path(msa_path).name} "
-                     f"({msa_len} aa) instead of targets.json ({tgt_len} aa)")
+                     f"({len(sequence)} aa) instead of targets.json ({tgt_len} aa)")
 
     helper_src = _BOLTZ_HELPER.format(nova_dir=str(NOVA_DIR))
     args_json  = json.dumps({"smiles": smiles, "target_id": target_id,
@@ -1843,7 +1907,14 @@ def _get_sol_balance_lamports(wallet: str) -> int:
 
 
 def _is_miner_registered() -> bool:
-    """Return True if a MinerAccount PDA exists for MINER_KEYPAIR's pubkey."""
+    """Return True if a MinerAccount PDA exists for MINER_KEYPAIR's pubkey.
+
+    In COORDINATOR_MODE, registration is tracked by the coordinator (POST /register),
+    not by on-chain PDA enumeration.  Return True to skip the on-chain check.
+    """
+    if COORDINATOR_MODE:
+        log.debug("[REGISTER] _is_miner_registered skipped (COORDINATOR_MODE=true) → True")
+        return True
     # Derive pubkey from keypair file
     try:
         kp_data = json.loads(Path(MINER_KEYPAIR).read_bytes())
