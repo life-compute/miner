@@ -40,6 +40,12 @@ COORD_FALLBACK_URL: Optional[str] = os.environ.get("COORDINATOR_FALLBACK_URL")
 BACKOFF_BASE_S = 5.0
 BACKOFF_MAX_S  = 300.0   # 5 min cap
 
+# Maximum candidate string length — must equal the coordinator's MAX_CANDIDATE_BYTES.
+# Source of truth: src/routes/results.ts  export const MAX_CANDIDATE_BYTES = 4096
+# Keeping these in sync ensures the miner never sends a candidate the coordinator
+# would refuse with 400 "candidate too long".
+MAX_CANDIDATE_BYTES: int = 4096
+
 # Queue JSONL location — written under the miner's data folder, never /tmp
 _WORK_DIR = Path(__file__).resolve().parents[1]
 QUEUE_PATH = _WORK_DIR / "data" / "coordinator_queue.jsonl"
@@ -232,7 +238,17 @@ class CoordinatorClient:
         """
         Persist a scored result to the durable queue and kick the drain loop.
         Thread-safe; never blocks the caller.
+
+        The candidate field is silently truncated to MAX_CANDIDATE_BYTES characters
+        if it exceeds the limit, matching the coordinator's MAX_CANDIDATE_BYTES
+        constant so that the submission is never refused on length alone.
         """
+        if len(candidate) > MAX_CANDIDATE_BYTES:
+            log.warning(
+                "[COORD] candidate truncated from %d to %d chars for mol=%s",
+                len(candidate), MAX_CANDIDATE_BYTES, molecule_hash,
+            )
+            candidate = candidate[:MAX_CANDIDATE_BYTES]
         item = QueuedResult(
             lease_id=lease_id,
             molecule_hash=molecule_hash,

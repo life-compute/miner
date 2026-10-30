@@ -613,5 +613,73 @@ class TestResultRecordFields(unittest.TestCase):
         self.assertEqual(body["score"], -9.1)
 
 
+class TestCandidateLengthLimit(unittest.TestCase):
+    """MAX_CANDIDATE_BYTES in the miner client must equal the coordinator's limit (4096)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def test_max_candidate_bytes_equals_coordinator_value(self):
+        """Constant must be 4096 — the coordinator's MAX_CANDIDATE_BYTES."""
+        from coordinator.client import MAX_CANDIDATE_BYTES
+        self.assertEqual(MAX_CANDIDATE_BYTES, 4096)
+
+    def test_candidate_within_limit_passes_unmodified(self):
+        """A candidate at exactly the limit must not be truncated."""
+        from coordinator.client import MAX_CANDIDATE_BYTES
+        received = []
+
+        def _handler(req_body):
+            received.append(json.loads(req_body))
+            return (200, {"accepted": True, "target": "CDK4"})
+
+        kp = MinerKeypair.generate()
+        srv, url = _start_mock_server({"POST /results": _handler})
+        try:
+            client = CoordinatorClient(kp, coordinator_url=url, queue_path=self.tmp / "q.jsonl")
+            exact = "C" * MAX_CANDIDATE_BYTES
+            client.enqueue_result(
+                lease_id="ab" * 16, molecule_hash="mol_ok",
+                score=-8.0, candidate=exact,
+            )
+            deadline = time.time() + 5
+            while time.time() < deadline and not received:
+                time.sleep(0.1)
+            client.stop()
+        finally:
+            srv.shutdown()
+
+        self.assertEqual(len(received), 1)
+        self.assertEqual(len(received[0]["candidate"]), MAX_CANDIDATE_BYTES)
+
+    def test_candidate_over_limit_is_truncated_to_max(self):
+        """A candidate exceeding MAX_CANDIDATE_BYTES must be truncated before sending."""
+        from coordinator.client import MAX_CANDIDATE_BYTES
+        received = []
+
+        def _handler(req_body):
+            received.append(json.loads(req_body))
+            return (200, {"accepted": True, "target": "CDK4"})
+
+        kp = MinerKeypair.generate()
+        srv, url = _start_mock_server({"POST /results": _handler})
+        try:
+            client = CoordinatorClient(kp, coordinator_url=url, queue_path=self.tmp / "q.jsonl")
+            too_long = "C" * (MAX_CANDIDATE_BYTES + 500)
+            client.enqueue_result(
+                lease_id="ab" * 16, molecule_hash="mol_long",
+                score=-8.0, candidate=too_long,
+            )
+            deadline = time.time() + 5
+            while time.time() < deadline and not received:
+                time.sleep(0.1)
+            client.stop()
+        finally:
+            srv.shutdown()
+
+        self.assertEqual(len(received), 1)
+        self.assertEqual(len(received[0]["candidate"]), MAX_CANDIDATE_BYTES)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
