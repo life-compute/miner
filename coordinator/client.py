@@ -239,16 +239,18 @@ class CoordinatorClient:
         Persist a scored result to the durable queue and kick the drain loop.
         Thread-safe; never blocks the caller.
 
-        The candidate field is silently truncated to MAX_CANDIDATE_BYTES characters
-        if it exceeds the limit, matching the coordinator's MAX_CANDIDATE_BYTES
-        constant so that the submission is never refused on length alone.
+        The candidate field must not exceed MAX_CANDIDATE_BYTES characters.
+        If it does, the result is dropped (never sent in any altered form),
+        an error is logged, and the caller carries on.
         """
         if len(candidate) > MAX_CANDIDATE_BYTES:
-            log.warning(
-                "[COORD] candidate truncated from %d to %d chars for mol=%s",
+            log.error(
+                "[COORD] candidate refused: %d chars exceeds MAX_CANDIDATE_BYTES=%d for mol=%s"
+                " — result dropped, candidate not altered",
                 len(candidate), MAX_CANDIDATE_BYTES, molecule_hash,
             )
-            candidate = candidate[:MAX_CANDIDATE_BYTES]
+            self._oversized_count = getattr(self, "_oversized_count", 0) + 1
+            return
         item = QueuedResult(
             lease_id=lease_id,
             molecule_hash=molecule_hash,

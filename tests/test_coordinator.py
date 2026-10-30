@@ -652,8 +652,8 @@ class TestCandidateLengthLimit(unittest.TestCase):
         self.assertEqual(len(received), 1)
         self.assertEqual(len(received[0]["candidate"]), MAX_CANDIDATE_BYTES)
 
-    def test_candidate_over_limit_is_truncated_to_max(self):
-        """A candidate exceeding MAX_CANDIDATE_BYTES must be truncated before sending."""
+    def test_candidate_over_limit_is_refused_and_never_sent(self):
+        """A candidate exceeding MAX_CANDIDATE_BYTES must be dropped — never sent."""
         from coordinator.client import MAX_CANDIDATE_BYTES
         received = []
 
@@ -670,15 +670,97 @@ class TestCandidateLengthLimit(unittest.TestCase):
                 lease_id="ab" * 16, molecule_hash="mol_long",
                 score=-8.0, candidate=too_long,
             )
-            deadline = time.time() + 5
-            while time.time() < deadline and not received:
-                time.sleep(0.1)
+            # Give the drain loop a moment; nothing should arrive
+            time.sleep(0.5)
             client.stop()
         finally:
             srv.shutdown()
 
-        self.assertEqual(len(received), 1)
-        self.assertEqual(len(received[0]["candidate"]), MAX_CANDIDATE_BYTES)
+        # Nothing must have been sent to the server
+        self.assertEqual(len(received), 0, "oversized candidate must not be sent in any form")
+
+    def test_candidate_over_limit_is_never_altered(self):
+        """The original candidate string is never modified when the result is dropped."""
+        from coordinator.client import MAX_CANDIDATE_BYTES
+        kp = MinerKeypair.generate()
+        # No server needed — the drop happens before queuing
+        client = CoordinatorClient(kp, coordinator_url="http://localhost:1",
+                                   queue_path=self.tmp / "q2.jsonl")
+        original = "X" * (MAX_CANDIDATE_BYTES + 100)
+        snapshot = original  # take a reference copy
+
+        client.enqueue_result(
+            lease_id="cd" * 16, molecule_hash="mol_unaltered",
+            score=-7.0, candidate=original,
+        )
+        client.stop()
+
+        # The string passed to enqueue_result must be bit-identical to the original
+        self.assertEqual(original, snapshot,
+                         "enqueue_result must not mutate the caller's string")
+        # Queue file must not contain this molecule (result was dropped)
+        queue_text = ""
+        if (self.tmp / "q2.jsonl").exists():
+            queue_text = (self.tmp / "q2.jsonl").read_text()
+        self.assertNotIn("mol_unaltered", queue_text,
+                         "dropped result must not appear in queue file")
+
+    def test_candidate_over_limit_increments_oversized_count(self):
+        """Dropping an oversized candidate increments _oversized_count."""
+        from coordinator.client import MAX_CANDIDATE_BYTES
+        kp = MinerKeypair.generate()
+        client = CoordinatorClient(kp, coordinator_url="http://localhost:1",
+                                   queue_path=self.tmp / "q3.jsonl")
+
+        self.assertFalse(hasattr(client, "_oversized_count"))
+        client.enqueue_result(
+            lease_id="ef" * 16, molecule_hash="mol_cnt1",
+            score=-6.0, candidate="Z" * (MAX_CANDIDATE_BYTES + 1),
+        )
+        self.assertEqual(client._oversized_count, 1)
+        client.enqueue_result(
+            lease_id="ef" * 16, molecule_hash="mol_cnt2",
+            score=-6.0, candidate="Z" * (MAX_CANDIDATE_BYTES + 2),
+        )
+        self.assertEqual(client._oversized_count, 2)
+        client.stop()
+
+    def test_candidate_over_limit_logs_error_not_warning(self):
+        """Oversized candidate must be logged at ERROR level, not WARNING."""
+        import logging
+        from coordinator.client import MAX_CANDIDATE_BYTES
+        kp = MinerKeypair.generate()
+        client = CoordinatorClient(kp, coordinator_url="http://localhost:1",
+                                   queue_path=self.tmp / "q4.jsonl")
+
+        records = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record)
+
+        handler = _Capture()
+        import coordinator.client as cc_mod
+        cc_logger = logging.getLogger(cc_mod.__name__)
+        cc_logger.addHandler(handler)
+        old_level = cc_logger.level
+        cc_logger.setLevel(logging.DEBUG)
+        try:
+            client.enqueue_result(
+                lease_id="gh" * 16, molecule_hash="mol_log",
+                score=-5.0, candidate="Q" * (MAX_CANDIDATE_BYTES + 10),
+            )
+        finally:
+            cc_logger.removeHandler(handler)
+            cc_logger.setLevel(old_level)
+            client.stop()
+
+        error_records = [r for r in records if r.levelno >= logging.ERROR
+                         and "mol_log" in r.getMessage()]
+        self.assertGreater(len(error_records), 0, "expected at least one ERROR log for oversized candidate")
+        warning_records = [r for r in records if r.levelno == logging.WARNING
+                           and "mol_log" in r.getMessage()]
+        self.assertEqual(len(warning_records), 0, "oversized candidate must not log at WARNING level")
 
 
 if __name__ == "__main__":
