@@ -23,6 +23,8 @@ import urllib.request
 from pathlib import Path
 from typing import Iterator, Optional
 
+from .ua import MINER_UA
+
 log = logging.getLogger(__name__)
 
 _WORK_DIR   = Path(__file__).resolve().parents[1]
@@ -80,7 +82,7 @@ def _download_shard(url: str, expected_sha256: str) -> Optional[Path]:
 
     log.info("[SHARD] downloading shard %s …", expected_sha256[:16])
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "life-compute-miner/c3"})
+        req = urllib.request.Request(url, headers={"User-Agent": MINER_UA})
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = resp.read()
     except Exception as e:

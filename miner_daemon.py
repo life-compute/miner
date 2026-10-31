@@ -846,7 +846,11 @@ def fetch_network_stats() -> dict:
                 _wallet = None
             if _wallet:
                 summary_url = f"{coord_url}/wallets/{_wallet}/summary"
-                with urllib.request.urlopen(summary_url, timeout=5) as _r:
+                _req = urllib.request.Request(
+                    summary_url,
+                    headers={"User-Agent": "life-compute-miner/2.0 (+https://lifecompute.ai)"},
+                )
+                with urllib.request.urlopen(_req, timeout=5) as _r:
                     _summary = json.loads(_r.read())
                 result.update({
                     "molecules_screened": _summary.get("accepted_results"),

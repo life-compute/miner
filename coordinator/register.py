@@ -26,10 +26,12 @@ import logging
 import os
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 from .auth import MinerKeypair
 from .client import CoordinatorClient, COORD_URL_DEFAULT, _signed_headers, _http
+from .ua import MINER_UA
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +50,7 @@ REWARDS_NOTICE_URL = (
 
 # The terms version the coordinator accepts.  Must match known_terms_versions
 # in the coordinator config (currently "1.0.0" or "1.1.0").
-TERMS_VERSION = "1.0.0"
+TERMS_VERSION = "1.1.0"
 
 # On-chain registration script location (Anchor JS client).
 ANCHOR_DIR = Path(os.environ.get("ANCHOR_DIR", "/tmp/life-compute/core"))
@@ -123,6 +125,60 @@ def _coordinator_register(
     except Exception as e:
         log.error("[REGISTER] coordinator /register network error: %s", e)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Start-up terms-version guard
+# ---------------------------------------------------------------------------
+
+class TermsVersionError(RuntimeError):
+    """Raised when the coordinator's /config does not list our TERMS_VERSION."""
+
+
+def check_terms_version(
+    coordinator_url: str = COORD_URL_DEFAULT,
+    terms_version: str = TERMS_VERSION,
+) -> None:
+    """
+    Fetch GET /config and verify that *terms_version* is in the coordinator's
+    ``known_terms_versions`` list.  Raises ``TermsVersionError`` if the field
+    is present but our version is not listed.  Logs a warning (does not raise)
+    if the field is absent, so the check degrades gracefully against older
+    coordinator deployments.
+
+    Call this once at miner start-up before ``register_command``.
+    """
+    url = coordinator_url.rstrip("/") + "/config"
+    req = urllib.request.Request(url, headers={"User-Agent": MINER_UA})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read()
+        config = json.loads(raw)
+    except Exception as exc:
+        log.warning(
+            "[REGISTER] could not fetch /config to verify terms version: %s", exc
+        )
+        return
+
+    known = config.get("known_terms_versions")
+    if known is None:
+        # Field absent in this coordinator version — degrade gracefully.
+        log.warning(
+            "[REGISTER] /config does not expose known_terms_versions; "
+            "skipping terms-version pre-flight check"
+        )
+        return
+
+    if terms_version not in known:
+        raise TermsVersionError(
+            f"Coordinator does not recognise terms_version={terms_version!r}. "
+            f"Known versions: {known}. "
+            "Update TERMS_VERSION in coordinator/register.py and re-run registration."
+        )
+    log.info(
+        "[REGISTER] terms-version pre-flight OK: %r is in %s",
+        terms_version, known,
+    )
 
 
 # ---------------------------------------------------------------------------

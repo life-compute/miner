@@ -51,6 +51,7 @@ log = logging.getLogger(__name__)
 # Filename safety: only well-formed UniProt IDs with .a3m.gz extension.
 # Same regex the coordinator enforces: ^[A-Z0-9]{6}\.a3m\.gz$
 import re
+from .ua import MINER_UA
 _SAFE_GZ_RE = re.compile(r'^[A-Z0-9]{6}\.a3m\.gz$')
 
 # Minimum free bytes required before attempting a download.
@@ -82,7 +83,7 @@ def _sha256_file(path: Path) -> str:
 
 def _get(url: str, timeout: float = _HTTP_TIMEOUT) -> bytes:
     """HTTP GET; returns body bytes.  Raises AlignFetchError on non-200 or network error."""
-    req = urllib.request.Request(url, headers={"User-Agent": "life-compute-miner/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": MINER_UA})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status != 200:

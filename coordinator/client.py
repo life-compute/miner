@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from .auth import MinerKeypair, validate_worker_name
+from .ua import MINER_UA
 
 log = logging.getLogger(__name__)
 
@@ -104,6 +105,7 @@ def _http(
         headers={
             "Content-Type": "application/json",
             "X-Auth": x_auth,
+            "User-Agent": MINER_UA,
         },
         method=method,
     )
