@@ -2122,6 +2122,22 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
 
         _maybe_advance_epoch()
 
+        # ── COORDINATOR_MODE fast-path ────────────────────────────────────────
+        # When COORDINATOR_MODE=True the miner operates under a remote lease:
+        # it fetches work from the coordinator, scores the assigned shards with
+        # the locked scorer profile, and posts results via the durable queue.
+        # PULSE, Brain pre-screen, ChEMBL downloads and model training do NOT
+        # run in this mode (the on-chain target/molecule selection is replaced
+        # by coordinator-assigned shards).  The old path (run_boltz2_scoring /
+        # submit_on_chain) is never reached when the flag is set.
+        if COORDINATOR_MODE:
+            from coordinator.loop import _get_or_create_client, coordinator_cycle
+            _coord_client = _get_or_create_client(gpu_idx)
+            coordinator_cycle(wlog, _coord_client, shared_stats, gpu_idx)
+            time.sleep(POLL_SECONDS)
+            continue
+        # ── End of COORDINATOR_MODE fast-path ────────────────────────────────
+
         target = targets[target_idx % len(targets)]
         target_idx += gpu_count  # skip by gpu_count so workers stay spread
         tid    = target["id"]

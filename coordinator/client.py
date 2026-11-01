@@ -387,7 +387,7 @@ class CoordinatorClient:
                     log.warning("[COORD] POST /results 410 lease expired  mol=%s — dropping",
                                 item.molecule_hash)
                     return True   # drop expired leases from queue
-                if status in (400, 401, 403):
+                if status in (400, 401, 403, 422):
                     log.warning("[COORD] POST /results %d (non-retriable): %s",
                                 status, data.get("error", ""))
                     return True   # don't retry auth/body errors forever
