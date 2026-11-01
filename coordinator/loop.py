@@ -147,50 +147,76 @@ MAX_SCORER_FAILURES: int = int(os.environ.get("COORD_MAX_SCORER_FAILURES", "5"))
 # If >95% of the last FAIL_RATE_WINDOW molecules are systemic failures, abandon lease.
 FAIL_RATE_WINDOW: int = 200
 
-# ── Boltz subprocess helper template ──────────────────────────────────────
-# Runs inside NOVA_VENV which has boltz 2.2.1 + nova_pulse_scorer available.
-# Accepts a JSON blob on argv[1]; prints one JSON line to stdout on success.
+# ── Reference-scoring subprocess helper ───────────────────────────────────
 #
-# CRITICAL: we import from nova_adaptive.nova_pulse_scorer (the original, under
-# nova_subnet/) NOT from adaptive.vendor.nova_pulse_scorer (the life-compute-miner
-# vendored copy).  The vendored copy sets BOLTZ_TMP relative to its own location
-# (life-compute-miner/adaptive/external_tools/…) which differs from where boltz
-# actually writes its output (nova_subnet/external_tools/…).  Using the original
-# avoids the pre_affinity_*.npz "No such file" FileNotFoundError.
+# Replaces the old _BOLTZ_HELPER which called nova_pulse_scorer._score_batch_impl
+# and omitted the –6.0 offset from the conversion.
+#
+# The new helper imports coordinator/reference_scoring/runner.py, which vendors
+# the validator's exact code (rescore.protein_yaml, boltz_flags_for, seed_for,
+# protein_dg with the –6.0 offset) and calls boltz.main.predict() directly.
+#
+# Accepts a JSON blob on argv[1]; prints ONE JSON line to stdout on success:
+#     {"raw": <float>, "score": <float>, "smiles": <str>}
+# Exits with code 2 on per-molecule errors, code 1 on systemic errors.
+#
+# NOVA_DIR / NOVA_VENV are still used for the interpreter (it has boltz 2.2.1 +
+# torch) and for the sys.path entry that covers boltz itself.  The old
+# nova_pulse_scorer import is gone.
 _BOLTZ_HELPER = """\
 import sys, json
 sys.path.insert(0, "{nova_dir}")
 
-# Apply scorer-profile settings to nova_pulse_scorer module-level constants.
-from nova_adaptive import nova_pulse_scorer as _nps
+# The reference_scoring package lives in the life-compute-miner tree.
+import pathlib
+_MINER_DIR = pathlib.Path("{miner_dir}")
+sys.path.insert(0, str(_MINER_DIR))
 
-args           = json.loads(sys.argv[1])
-smiles         = args["smiles"]
-target         = args["target"]
-protein_seq    = args["protein_sequence"]
-msa_path       = args["msa_path"]
-profile        = args.get("scorer_profile", {{}})
-flags          = profile.get("flags", {{}})
-msa_dict       = profile.get("msa_sampling", {{}})
-seed_val       = profile.get("seed")
+args = json.loads(sys.argv[1])
+smiles              = args["smiles"]
+msa_path            = args["msa_path"]
+scorer_profile_dict = args.get("scorer_profile", {{}})
+default_seed        = args.get("default_seed", 68)
+num_subsampled_msa  = args.get("num_subsampled_msa", 1024)
+timeout_s           = args.get("timeout_s", 1200.0)
 
-# Patch FAST_* constants from profile
-_nps.FAST_RECYCLING_STEPS       = flags.get("recycling_steps",   _nps.FAST_RECYCLING_STEPS)
-_nps.FAST_SAMPLING_STEPS        = flags.get("sampling_steps",    _nps.FAST_SAMPLING_STEPS)
-_nps.FAST_DIFFUSION_SAMPLES     = flags.get("diffusion_samples", _nps.FAST_DIFFUSION_SAMPLES)
-_nps.FAST_SAMPLING_STEPS_AFF    = flags.get("sampling_steps_affinity",    _nps.FAST_SAMPLING_STEPS)
-_nps.FAST_DIFFUSION_SAMPLES_AFF = flags.get("diffusion_samples_affinity", _nps.FAST_DIFFUSION_SAMPLES)
+from coordinator.reference_scoring.runner import run_protein_reference, RescoreFailed
 
-detailed = _nps._score_batch_impl([smiles], target, protein_seq, msa_path)
-d   = detailed.get(smiles) or {{}}
-raw = d.get("affinity_pred_value")
-print(json.dumps({{"raw": raw, "smiles": smiles}}))
+try:
+    result = run_protein_reference(
+        smiles=smiles,
+        msa_path=msa_path,
+        scorer_profile_dict=scorer_profile_dict,
+        default_seed=default_seed,
+        num_subsampled_msa=num_subsampled_msa,
+        timeout_s=timeout_s,
+    )
+    print(json.dumps(result))
+    sys.exit(0)
+except RescoreFailed as exc:
+    sys.stderr.write(f"SYSTEMIC: {{exc}}\\n")
+    sys.exit(1)
+except (ValueError, RuntimeError) as exc:
+    # Per-molecule patterns — see loop._PER_MOL_PATTERNS
+    msg = str(exc)
+    sys.stderr.write(msg + "\\n")
+    sys.exit(2)
+except Exception as exc:
+    sys.stderr.write(f"SYSTEMIC: {{exc}}\\n")
+    sys.exit(1)
 """
 
 
 def startup_boltz_check() -> None:
     """
     Fail fast if Boltz 2.2.1 or the GPU is unavailable.
+
+    Checks:
+      1. NOVA_VENV interpreter exists.
+      2. boltz.__version__ == "2.2.1" — stops if it is not 2.2.1 (ref scoring
+         was validated against exactly this version; a different version must
+         be explicitly reviewed before deployment).
+      3. torch.cuda.is_available() — must be True.
 
     Called once before any lease is taken.  Raises RuntimeError with a single
     clear error line if the check fails — the caller (gpu_worker / main) must
@@ -205,8 +231,12 @@ def startup_boltz_check() -> None:
         "import sys\n"
         f"sys.path.insert(0, '{NOVA_DIR}')\n"
         "import boltz; import torch\n"
+        "ver = boltz.__version__\n"
+        "if ver != '2.2.1':\n"
+        "    print(f'BOLTZ_VERSION_MISMATCH: {ver!r} != 2.2.1', flush=True)\n"
+        "    sys.exit(2)\n"
         "gpu_ok = torch.cuda.is_available()\n"
-        "print('BOLTZ_OK', boltz.__version__, 'GPU', gpu_ok)\n"
+        "print('BOLTZ_OK', ver, 'GPU', gpu_ok)\n"
         "sys.exit(0 if gpu_ok else 1)\n"
     )
     try:
@@ -218,6 +248,11 @@ def startup_boltz_check() -> None:
         raise RuntimeError(
             f"[COORD] STARTUP_CHECK FAILED: could not exec nova venv: {exc}"
         ) from exc
+    if r.returncode == 2:
+        # Version mismatch — hard stop
+        raise RuntimeError(
+            f"[COORD] STARTUP_CHECK FAILED: {(r.stdout + r.stderr).strip()}"
+        )
     if r.returncode != 0:
         details = (r.stdout + r.stderr)[-300:]
         raise RuntimeError(
@@ -403,11 +438,18 @@ def _to_contract_score(
     raw: Optional[float],
     modality: str,
 ) -> Optional[float]:
-    """Convert raw scorer output to the kcal/mol float required by POST /results."""
+    """Convert scorer output to the kcal/mol float required by POST /results.
+
+    For protein: _score_protein() now returns the already-converted kcal/mol
+    score from reference_scoring.runner (protein_dg with the –6.0 offset), so
+    this function passes it through without further conversion.
+
+    For mRNA: run_boltz2_mrna_scoring() already returns kcal/mol.
+    """
     if raw is None:
         return None
     if modality == "protein":
-        return _affinity_pred_value_to_dg(raw)
+        return float(raw)   # already kcal/mol from protein_dg(); pass through
     if modality == "mrna":
         return float(raw)   # run_boltz2_mrna_scoring already returns kcal/mol
     return None
@@ -563,21 +605,34 @@ def _score_protein(
     wlog: logging.Logger,
 ) -> Optional[float]:
     """
-    Score one protein-mode molecule.
+    Score one protein-mode molecule using the reference scoring path.
 
     Dispatches to NOVA_VENV (boltz 2.2.1) via a subprocess so this module
-    never tries to import boltz under PM2's /usr/bin/python3.  Uses the
-    same pattern as miner_daemon.run_boltz2_scoring.
+    never tries to import boltz under PM2's /usr/bin/python3.
 
-    Returns raw affinity_pred_value (log10 IC50/µM); caller converts to kcal/mol.
+    The subprocess runs coordinator/reference_scoring/runner.py which vendors
+    the validator's exact conversion:  protein_dg(affinity_pred_value) =
+    round(1.364247 * (affinity_pred_value - 6.0), 3).
+
+    Returns the kcal/mol score directly (already converted); the caller passes
+    it straight to _to_contract_score with modality="protein" which no longer
+    applies an additional conversion.
+
+    protein_sequence is accepted for interface compatibility but is NOT passed
+    to the subprocess: the reference runner reads the sequence from the a3m
+    (sequence_from_msa) exactly as the validator does.
     """
-    helper_src = _BOLTZ_HELPER.format(nova_dir=str(NOVA_DIR))
+    helper_src = _BOLTZ_HELPER.format(
+        nova_dir=str(NOVA_DIR),
+        miner_dir=str(_WORK_DIR),
+    )
     args_json  = json.dumps({
-        "smiles":           smiles,
-        "target":           target_id,
-        "protein_sequence": protein_sequence,
-        "msa_path":         str(msa_path),
-        "scorer_profile":   scorer_profile,
+        "smiles":              smiles,
+        "msa_path":            str(msa_path),
+        "scorer_profile":      scorer_profile,
+        "default_seed":        68,
+        "num_subsampled_msa":  1024,
+        "timeout_s":           300.0,
     })
     try:
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False,
@@ -601,7 +656,14 @@ def _score_protein(
         return None
 
     if r.returncode != 0:
-        # C26: classify failure — per-molecule vs systemic
+        # Exit code 2 = per-molecule error (helper exited via PerMoleculeError /
+        # ValueError branch); exit code 1 = systemic.
+        if r.returncode == 2:
+            reason = r.stderr.strip()[:120] or "per-molecule error (rc=2)"
+            raise PerMoleculeError(
+                f"Per-molecule error for {smiles[:40]!r}: {reason}"
+            )
+        # rc=1 or other — also check text patterns for safety (C26 compat)
         is_mol_err, reason = _is_per_molecule_error(r.stderr, r.stdout)
         if is_mol_err:
             raise PerMoleculeError(
@@ -614,7 +676,11 @@ def _score_protein(
     for line in reversed(r.stdout.strip().splitlines()):
         try:
             parsed = json.loads(line)
-            return parsed.get("raw")   # float or None
+            # "score" is the already-converted kcal/mol value from protein_dg().
+            # Return it as-is; _to_contract_score passes it through for "protein".
+            score = parsed.get("score")
+            if score is not None:
+                return float(score)
         except Exception:
             continue
 
