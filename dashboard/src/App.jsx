@@ -475,7 +475,7 @@ function MinerStatusPanel({ alive, currentTarget, minerId, lastUpdated }) {
 
 /* ─── Live scoring feed panel ───────────────────────────────── */
 function LiveScoringFeedPanel({ feed }) {
-  const rows = feed ?? []
+  const rows = (feed ?? []).slice(-20)   // cap: show last 20 entries only
   const srcColor = (s) =>
     s === 'ref'              ? T.purple :
     s === 'generated'        ? T.cyan :
@@ -492,7 +492,8 @@ function LiveScoringFeedPanel({ feed }) {
 
       {/* scrollable table */}
       <div style={{ overflowX: 'auto' }}>
-        <div style={{ minWidth: '520px', minHeight: '420px' }}>
+        <div style={{ minWidth: '520px' }}>
+          {/* sticky column header — outside the vertical scroll div */}
           <div style={{ display: 'grid',
                         gridTemplateColumns: '70px 60px 160px 72px 72px 42px 52px',
                         gap: '8px', padding: '4px 0 6px',
@@ -505,6 +506,8 @@ function LiveScoringFeedPanel({ feed }) {
             <span style={{ textAlign:'center' }}>SOURCE</span>
           </div>
 
+          {/* vertical-scrollable row area — max 20 rows visible */}
+          <div style={{ maxHeight: '380px', overflowY: 'auto' }}>
           {rows.length === 0 ? (
             <div style={{ color: T.textDim, fontSize: '11px', padding: '16px 0' }}>
               AWAITING FIRST BOLTZ2 EVALUATION…
@@ -562,6 +565,7 @@ function LiveScoringFeedPanel({ feed }) {
               </span>
             </div>
           ))}
+          </div>{/* end vertical-scroll rows */}
         </div>
       </div>
     </Panel>
@@ -652,19 +656,57 @@ function MoleculesPanel({ count }) {
 }
 
 /* ─── $LIFE earned panel ────────────────────────────────────── */
-function LifeEarnedPanel({ earned }) {
-  const n = useAnimatedNumber(Math.floor(earned))
+function LifeEarnedPanel({ earned, confirmed, txSub = 0, txConf = 0 }) {
+  const nSub  = useAnimatedNumber(Math.floor(earned))
+  const nConf = useAnimatedNumber(Math.floor(confirmed))
+  const confirmPct = earned > 0 ? Math.min(100, (confirmed / earned) * 100).toFixed(0) : '—'
+  const txPct = txSub > 0 ? Math.min(100, (txConf / txSub) * 100).toFixed(0) : '—'
   return (
     <Panel accent={T.purple}>
       <div style={S.panelTitle}>
         <span style={S.titleAccent(T.purple)}>✦</span>
         <span>$LIFE EARNED</span>
       </div>
-      <div style={S.bigNum(T.purple)}>{n.toLocaleString()}</div>
-      <div style={{ fontSize: '18px', color: T.purpleDim, marginTop: '-4px', marginBottom: '8px',
-                    textShadow: glow(T.purple, 3) }}>LIFE TOKENS</div>
-      <div style={{ ...S.label, marginBottom: '12px' }}>minted on-chain for verified discoveries</div>
-      <div style={{ height: '2px', background: `linear-gradient(90deg, ${T.purple}, ${T.cyan})`,
+      {/* Submitted (optimistic — tx landed on-chain) */}
+      <div style={{ fontSize: '11px', color: T.textDim, marginBottom: '2px', letterSpacing: '0.08em' }}>
+        SUBMITTED
+      </div>
+      <div style={S.bigNum(T.purple)}>{nSub.toLocaleString()}</div>
+      <div style={{ fontSize: '13px', color: T.purpleDim, marginTop: '-4px', marginBottom: '10px',
+                    textShadow: glow(T.purple, 3) }}>LIFE TOKENS (tx confirmed)</div>
+      {/* Confirmed (validator-confirmed — reward_minted eligible) */}
+      <div style={{ fontSize: '11px', color: T.textDim, letterSpacing: '0.08em' }}>
+        VALIDATOR CONFIRMED
+      </div>
+      <div style={{ fontSize: '36px', fontWeight: 700, fontFamily: 'monospace',
+                    color: '#00ff88', textShadow: glow('#00ff88', 6), lineHeight: 1.1 }}>
+        {nConf.toLocaleString()}
+      </div>
+      <div style={{ fontSize: '13px', color: '#00cc66', marginTop: '-4px', marginBottom: '8px' }}>
+        LIFE TOKENS (reward minted) · {confirmPct}% confirm rate
+      </div>
+      {/* Count-based confirm rate — same basis as validator accept rate */}
+      <div style={{ fontSize: '10px', color: T.textDim, letterSpacing: '0.08em',
+                    marginBottom: '4px', marginTop: '4px' }}>
+        TX ACCEPT RATE (count-based)
+      </div>
+      <div style={{ fontSize: '11px', fontFamily: 'monospace', color: '#00ff88',
+                    letterSpacing: '0.06em', marginBottom: '8px' }}>
+        <span style={{ fontWeight: 700 }}>{txConf.toLocaleString()}</span>
+        <span style={{ color: T.textDim }}> / {txSub.toLocaleString()} txs</span>
+        {txSub > 0 && (
+          <span style={{ ...S.pill('#00ff88'), marginLeft: '8px', verticalAlign: 'middle',
+                         fontSize: '10px', color: '#001a0d', background: '#00ff88',
+                         fontWeight: 700 }}>
+            {txPct}%
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: '9px', color: T.textDim, letterSpacing: '0.06em',
+                    marginBottom: '8px', lineStyle: 'italic' }}>
+        matches validator accept-rate basis · resets on restart
+      </div>
+      <div style={{ height: '2px', background: `linear-gradient(90deg, ${T.purple}, #00ff88)`,
                     boxShadow: `0 0 8px ${T.purple}`, borderRadius: '1px' }} />
     </Panel>
   )
@@ -802,7 +844,7 @@ function TargetsPanel({ targets }) {
           <span style={{ animation: 'blink 1s step-end infinite', color: T.green }}> █</span>
         </div>
       ) : (
-        <>
+        <div style={{ maxHeight: '340px', overflowY: 'auto' }}>
           {protein.map((t, i) => (
             <div key={i} style={S.targetItem}>
               <div style={S.targetPip} />
@@ -830,35 +872,36 @@ function TargetsPanel({ targets }) {
               <span style={{ ...S.pill(T.green) }}>ACTIVE</span>
             </div>
           ))}
-        </>
+          {/* LOCKED ghost rows — shown inside the same scroll area */}
+          {PROTEIN_GENES.filter(g => !targets.includes(g)).slice(0, 2).map((g, i) => (
+            <div key={g} style={{ ...S.targetItem, opacity: 0.3, border: `1px solid ${T.border}` }}>
+              <div style={{ ...S.targetPip, background: T.textDim, boxShadow: 'none', animation: 'none' }} />
+              <span style={{ color: T.textDim }}>{g}</span>
+              <span style={{ marginLeft: 'auto', ...S.pill(T.textDim) }}>LOCKED</span>
+            </div>
+          ))}
+          {MRNA_GENES.filter(g => !targets.includes(g)).slice(0, 2).map((g, i) => (
+            <div key={g} style={{ ...S.targetItem, opacity: 0.25, border: `1px solid ${T.border}` }}>
+              <div style={{ ...S.targetPip, background: T.textDim, boxShadow: 'none', animation: 'none' }} />
+              <span style={{ color: T.textDim }}>{g}</span>
+              <span style={{ marginLeft: '6px', fontSize: '9px', color: T.textDim,
+                             border: '1px solid #ffffff20', borderRadius: '3px',
+                             padding: '1px 4px', fontFamily: T.mono }}>RNA</span>
+              <span style={{ marginLeft: 'auto', ...S.pill(T.textDim) }}>LOCKED</span>
+            </div>
+          ))}
+          {CRISPR_GENES.filter(g => !targets.includes(g)).slice(0, 2).map((g, i) => (
+            <div key={g} style={{ ...S.targetItem, opacity: 0.25, border: `1px solid ${T.border}` }}>
+              <div style={{ ...S.targetPip, background: T.textDim, boxShadow: 'none', animation: 'none' }} />
+              <span style={{ color: T.textDim }}>{g}</span>
+              <span style={{ marginLeft: '6px', fontSize: '9px', color: T.textDim,
+                             border: '1px solid #ffffff20', borderRadius: '3px',
+                             padding: '1px 4px', fontFamily: T.mono }}>CRISPR</span>
+              <span style={{ marginLeft: 'auto', ...S.pill(T.textDim) }}>LOCKED</span>
+            </div>
+          ))}
+        </div>
       )}
-      {PROTEIN_GENES.filter(g => !targets.includes(g)).slice(0, 2).map((g, i) => (
-        <div key={g} style={{ ...S.targetItem, opacity: 0.3, border: `1px solid ${T.border}` }}>
-          <div style={{ ...S.targetPip, background: T.textDim, boxShadow: 'none', animation: 'none' }} />
-          <span style={{ color: T.textDim }}>{g}</span>
-          <span style={{ marginLeft: 'auto', ...S.pill(T.textDim) }}>LOCKED</span>
-        </div>
-      ))}
-      {MRNA_GENES.filter(g => !targets.includes(g)).slice(0, 2).map((g, i) => (
-        <div key={g} style={{ ...S.targetItem, opacity: 0.25, border: `1px solid ${T.border}` }}>
-          <div style={{ ...S.targetPip, background: T.textDim, boxShadow: 'none', animation: 'none' }} />
-          <span style={{ color: T.textDim }}>{g}</span>
-          <span style={{ marginLeft: '6px', fontSize: '9px', color: T.textDim,
-                         border: '1px solid #ffffff20', borderRadius: '3px',
-                         padding: '1px 4px', fontFamily: T.mono }}>RNA</span>
-          <span style={{ marginLeft: 'auto', ...S.pill(T.textDim) }}>LOCKED</span>
-        </div>
-      ))}
-      {CRISPR_GENES.filter(g => !targets.includes(g)).slice(0, 2).map((g, i) => (
-        <div key={g} style={{ ...S.targetItem, opacity: 0.25, border: `1px solid ${T.border}` }}>
-          <div style={{ ...S.targetPip, background: T.textDim, boxShadow: 'none', animation: 'none' }} />
-          <span style={{ color: T.textDim }}>{g}</span>
-          <span style={{ marginLeft: '6px', fontSize: '9px', color: T.textDim,
-                         border: '1px solid #ffffff20', borderRadius: '3px',
-                         padding: '1px 4px', fontFamily: T.mono }}>CRISPR</span>
-          <span style={{ marginLeft: 'auto', ...S.pill(T.textDim) }}>LOCKED</span>
-        </div>
-      ))}
     </Panel>
   )
 }
@@ -1310,6 +1353,362 @@ function ActiveStructurePanel({ currentTarget }) {
           {info.caption}
         </div>
       )}
+    </Panel>
+  )
+}
+
+/* ─── PRIME EDITING // pegRNA OPTIMIZATION panel ──────────────
+ *
+ * Stage 4 visualisation. Reads /peg, which serves the LOG-ONLY pegRNA daemon
+ * rows (output/life_peg_daemon_scores.jsonl) plus the miner-vs-validator
+ * agreement computed by scripts/peg_observer.py.
+ *
+ * SIZING — full-width row (gridColumn '1 / -1').
+ * This panel was originally placed beside ActiveStructurePanel at matching
+ * 334×739. That was abandoned on measured evidence: a 43-column (±21nt) helix
+ * has only 270px of inner width in a quarter-grid cell, i.e. 6px per base,
+ * which renders as an unreadable colour smear. The same window gets ~31px per
+ * base in a full-width row. Legible real sequence beat the side-by-side
+ * pairing, so the panel spans the grid and lays its content out in two
+ * internal columns instead.
+ *
+ * HONESTY RULES (structural, not aspirational):
+ *   · no `peg` payload            → panel returns null, renders nothing
+ *   · any null field              → renders '—', never a zero or a placeholder
+ *   · helix/before-after          → render ONLY from row.helix, which the server
+ *                                   emits only when all five geometry invariants
+ *                                   reconstruct against the Stage 0.1 reference
+ *   · AFTER track                 → rendered only where edited_seq actually
+ *                                   differs from wt_seq
+ *   · agreement                   → 'PENDING' until the observer has really
+ *                                   checked that row; never an implied tick
+ * Every glyph drawn is a base from a real reference window for a real logged
+ * candidate. There is no decorative sequence anywhere in this component.
+ */
+const PEG_PINK = '#ff69b4'
+
+function PrimeEditingPanel({ peg }) {
+  if (!peg) return null
+
+  const pink       = PEG_PINK
+  const pinkDim    = 'rgba(255,105,180,0.55)'
+  const pinkFaint  = 'rgba(255,105,180,0.10)'
+  const pinkBorder = 'rgba(255,105,180,0.25)'
+
+  const {
+    latest, recent = [], agreement = null,
+    total_evaluated = 0, n_hotspots = 0, best_efficiency = null,
+    model_sha256 = null,
+  } = peg
+
+  // ACGT palette — same mapping as the CRISPR panel for cross-panel consistency.
+  const BASE_COLOR = { A: '#00ff41', C: '#00bfff', G: PEG_PINK, T: '#ffa500', N: '#555' }
+
+  const fmt = (v, dp = 4) => (typeof v === 'number' ? v.toFixed(dp) : '—')
+
+  // Agreement tile — only ever reflects what the observer actually measured.
+  const agr        = latest?.agreement ?? null
+  const agrStatus  = agr?.status ?? (agreement?.status === 'PENDING' ? 'PENDING' : 'PENDING')
+  const agrColor   = agrStatus === 'EXACT' ? '#00ff41'
+                   : agrStatus === 'DIVERGENT' ? '#ff4444'
+                   : T.textDim
+  const agrLabel   = agrStatus === 'EXACT'     ? 'EXACT Δ=0'
+                   : agrStatus === 'DIVERGENT' ? `Δ=${fmt(agr?.delta, 6)}`
+                   : agrStatus === 'PENDING'   ? 'PENDING'
+                   : agrStatus
+
+  const h = latest?.helix ?? null
+
+  /* Which functional span covers a given column of the helix slice.
+   * Spans can start before the slice (negative start) — clamped by the
+   * range test, so a partially-visible span tints only its visible columns. */
+  const spanAt = (i) => {
+    if (!h) return null
+    if (i >= h.rtt_start && i < h.rtt_start + h.rtt_len)          return 'RTT'
+    if (i >= h.pbs_start && i < h.pbs_start + h.pbs_len)          return 'PBS'
+    if (i >= h.spacer_start && i < h.spacer_start + h.spacer_len) return 'SPACER'
+    return null
+  }
+  const SPAN_TINT = {
+    SPACER: 'rgba(0,191,255,0.13)',
+    PBS:    'rgba(255,165,0,0.13)',
+    RTT:    'rgba(255,105,180,0.16)',
+  }
+
+  const isEditCol = (i) => h && i >= h.edit_index && i < h.edit_index + h.edit_len
+  const isPamCol  = (i) => h && i >= h.pam_index  && i < h.pam_index + 3
+
+  /* Cells are flex, not fixed-width: 43 columns divide whatever width the
+   * container has. This replaced a hardcoded 13px cell that produced a 559px
+   * track inside a 270px box — a 289px overflow that pushed the edit column
+   * (index 21, the centre of the window and the entire point of the view)
+   * off-screen. Measured alternatives at 43 columns: narrow grid cell = 6px
+   * per base (an unreadable smear), full-width row = ~31px (clearly legible).
+   * Hence this panel is full-width. Flex means it cannot silently overflow
+   * again if the layout changes. */
+  const cell = {
+    flex: '1 1 0', minWidth: 0, textAlign: 'center', fontFamily: T.mono,
+    fontSize: 13, lineHeight: '18px', letterSpacing: 0,
+  }
+
+  // One base track. `diffAgainst` highlights only genuinely changed bases.
+  const track = (seq, { diffAgainst = null, complement = false } = {}) => (
+    <div style={{ display: 'flex' }}>
+      {seq.split('').map((ch, i) => {
+        const base    = complement ? ({ A: 'T', C: 'G', G: 'C', T: 'A' }[ch] ?? 'N') : ch
+        const changed = diffAgainst != null && diffAgainst[i] !== ch
+        const edit    = isEditCol(i)
+        return (
+          <span key={i} style={{
+            ...cell,
+            color: changed ? '#ffffff' : (BASE_COLOR[base] ?? pinkDim),
+            background: changed ? pink : (edit ? 'rgba(255,105,180,0.22)' : SPAN_TINT[spanAt(i)] ?? 'transparent'),
+            fontWeight: changed || edit ? 700 : 400,
+            textShadow: changed ? `0 0 4px ${pink}` : 'none',
+          }}>{base}</span>
+        )
+      })}
+    </div>
+  )
+
+  return (
+    <Panel accent={pink} style={{ gridColumn: '1 / -1' }}>
+      <div style={S.panelTitle}>
+        <span style={S.titleAccent(pink)}>⬡</span>
+        <span>PRIME EDITING // pegRNA OPTIMIZATION</span>
+        <span style={{ marginLeft: 'auto', ...S.pill(total_evaluated > 0 ? pink : T.textDim) }}>
+          {total_evaluated.toLocaleString()} EVAL
+        </span>
+      </div>
+
+      {/* two internal columns: DNA imagery left (needs the width), data right */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 380px',
+                    gap: 16, alignItems: 'start' }}>
+      <div style={{ minWidth: 0 }}>
+
+      {/* ── three stat tiles ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
+        {[
+          { label: 'TARGET',     val: latest?.target ?? '—', color: pink },
+          { label: 'PRED. EFF',  val: fmt(latest?.predicted_efficiency, 4), color: pink },
+          { label: 'AGREEMENT',  val: agrLabel, color: agrColor },
+        ].map(({ label, val, color }) => (
+          <div key={label} style={{ background: pinkFaint, border: `1px solid ${pinkBorder}`,
+                                    padding: '7px 9px', borderRadius: 2, minWidth: 0 }}>
+            <div style={{ color: pinkDim, fontSize: 9, letterSpacing: '0.18em', marginBottom: 4 }}>
+              {label}
+            </div>
+            <div style={{ color, fontFamily: T.mono, fontSize: 13, fontWeight: 700,
+                          textShadow: glow(color, 2), overflow: 'hidden',
+                          textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── DNA double-helix strip + before/after ──
+           Renders only when the server could reconstruct the window. */}
+      <div style={{
+        width: '100%', minHeight: '220px', background: '#0a0208',
+        border: `1px solid ${pink}44`,
+        boxShadow: `inset 0 0 20px #0a0208, 0 0 8px ${pink}33`,
+        position: 'relative', overflow: 'hidden',
+        marginTop: '8px', marginBottom: '8px',
+        padding: '10px', boxSizing: 'border-box',
+      }}>
+        {!h ? (
+          <div style={{ color: T.textDim, fontSize: 10, fontFamily: T.mono,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        height: '100%', textAlign: 'center', padding: '0 12px' }}>
+            NO RECONSTRUCTABLE CANDIDATE<br />
+            <span style={{ fontSize: 9, opacity: 0.7 }}>
+              DNA view renders only from verified real candidate geometry
+            </span>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, overflow: 'hidden' }}>
+
+            {/* position + strand */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10,
+                          color: pinkDim, letterSpacing: '0.1em' }}>
+              <span>{latest.gene} · {latest.strand} STRAND · POS {latest.genomic_edit_pos}</span>
+              <span>±21nt WINDOW · 43 COLUMNS</span>
+            </div>
+
+            {/* ── double helix: sense strand, rungs, antisense strand ── */}
+            <div style={{ fontSize: 10, color: pinkDim, letterSpacing: '0.12em', marginTop: 2 }}>
+              TARGET DUPLEX — 5′→3′
+            </div>
+            {track(h.wt)}
+            <div style={{ display: 'flex' }}>
+              {h.wt.split('').map((_, i) => (
+                <span key={i} style={{
+                  ...cell, fontSize: 11, color: isEditCol(i) ? pink : 'rgba(255,105,180,0.30)',
+                  background: isEditCol(i) ? 'rgba(255,105,180,0.22)' : SPAN_TINT[spanAt(i)] ?? 'transparent',
+                }}>|</span>
+              ))}
+            </div>
+            {track(h.wt, { complement: true })}
+
+            {/* nick / PAM / edit markers — real offsets, clamped to the slice */}
+            <div style={{ display: 'flex' }}>
+              {h.wt.split('').map((_, i) => {
+                const isNick = i === h.nick_index
+                const mark = isEditCol(i) ? '▲' : isNick ? '▼' : isPamCol(i) ? '▬' : ''
+                const col  = isEditCol(i) ? pink : isNick ? '#00ff41' : '#ffa500'
+                return <span key={i} style={{ ...cell, fontSize: 10, color: col }}>{mark}</span>
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: 14, fontSize: 9, color: pinkDim,
+                          letterSpacing: '0.08em', marginTop: 2 }}>
+              <span style={{ color: '#00ff41' }}>▼ NICK</span>
+              <span style={{ color: '#ffa500' }}>▬ PAM {h.pam}</span>
+              <span style={{ color: pink }}>▲ EDIT</span>
+              <span style={{ color: '#00bfff' }}>▮ SPACER</span>
+              <span style={{ color: '#ffa500' }}>▮ PBS</span>
+              <span style={{ color: pink }}>▮ RT TEMPLATE</span>
+            </div>
+
+            {/* ── before / after ──
+                 Labels sit ABOVE their tracks, not inline: an inline label plus
+                 gap stole width from the 43 columns and clipped the diff. */}
+            <div style={{ borderTop: `1px solid ${pinkBorder}`, marginTop: 6, paddingTop: 6 }}>
+              <div style={{ fontSize: 9, color: pinkDim, letterSpacing: '0.14em' }}>
+                BEFORE — WILD TYPE
+              </div>
+              {track(h.wt)}
+              {h.edited !== h.wt ? (
+                <>
+                  <div style={{ fontSize: 9, color: pink, letterSpacing: '0.14em',
+                                textShadow: glow(pink, 2), marginTop: 4 }}>
+                    AFTER — pegRNA-ENCODED
+                  </div>
+                  {track(h.edited, { diffAgainst: h.wt })}
+                </>
+              ) : (
+                <div style={{ fontSize: 9, color: T.textDim, marginTop: 4 }}>
+                  no base change encoded at this position
+                </div>
+              )}
+              <div style={{ fontSize: 11, color: pinkDim, marginTop: 5 }}>
+                {latest.wt_seq} → <span style={{ color: pink, fontWeight: 700 }}>{latest.edited_seq}</span>
+                {'  '}· {latest.edit_type ?? '—'}
+                {latest.correction_length != null ? ` · ${latest.correction_length}nt` : ''}
+                {latest.nick_to_edit != null ? ` · nick→edit ${latest.nick_to_edit}nt` : ''}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      </div>{/* end left column */}
+
+      <div style={{ minWidth: 0 }}>
+
+      {/* ── pegRNA components — real sequence text ── */}
+      {latest && (
+        <div style={{ background: 'rgba(255,105,180,0.05)', border: `1px solid ${pinkBorder}`,
+                      padding: '8px 10px', marginBottom: 8, borderRadius: 2 }}>
+          {[
+            { k: 'SPACER',  v: latest.spacer, c: '#00bfff' },
+            { k: 'PBS',     v: latest.pbs,    c: '#ffa500' },
+            { k: 'RT TMPL', v: latest.rtt,    c: pink },
+          ].map(({ k, v, c }) => (
+            <div key={k} style={{ marginBottom: 5 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 1 }}>
+                <span style={{ color: pinkDim, fontSize: 9, letterSpacing: '0.14em' }}>{k}</span>
+                <span style={{ color: pinkDim, fontFamily: T.mono, fontSize: 9 }}>
+                  {v ? `${v.length}nt` : '—'}
+                </span>
+              </div>
+              <div style={{ fontFamily: T.mono, fontSize: 11, color: c, letterSpacing: '0.04em',
+                            wordBreak: 'break-all', lineHeight: '14px' }}>
+                {v ?? '—'}
+              </div>
+            </div>
+          ))}
+          <div style={{ borderTop: `1px solid ${pinkBorder}`, paddingTop: 4, marginTop: 2,
+                        display: 'flex', justifyContent: 'space-between', fontSize: 9,
+                        color: pinkDim }}>
+            <span>EDIT TYPE <span style={{ color: pink, fontWeight: 700 }}>
+              {latest.edit_type ?? '—'}</span></span>
+            <span>RANK <span style={{ color: pink, fontWeight: 700 }}>
+              {latest.rank ?? '—'}</span>/{latest.n_candidates ?? '—'}</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── last 10 evaluations — same scroll-feed pattern as CRISPR ── */}
+      <div style={{ color: pinkDim, fontSize: 9, letterSpacing: '0.18em', marginBottom: 4 }}>
+        LAST 10 EVALUATIONS
+      </div>
+      <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column',
+                    gap: 3, paddingRight: 2 }}>
+        {recent.length === 0 && (
+          <div style={{ color: pinkDim, fontSize: 10, padding: '6px 0' }}>No evaluations yet.</div>
+        )}
+        {recent.map((r, i) => {
+          const ok = r.agreement?.status === 'EXACT'
+          const dv = r.agreement?.status === 'DIVERGENT'
+          return (
+            <div key={`${r.ts}-${r.rank}-${i}`}
+                 style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto',
+                          alignItems: 'center', gap: 6, padding: '4px 6px',
+                          background: i === 0 ? pinkFaint : 'transparent',
+                          border: `1px solid ${i === 0 ? pinkBorder : 'transparent'}`,
+                          borderRadius: 2, fontSize: 10 }}>
+              <span style={{ fontFamily: T.mono, color: '#00bfff', letterSpacing: '0.04em',
+                             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {r.spacer ?? '—'}
+              </span>
+              <span style={{ color: pinkDim, fontFamily: T.mono, fontSize: 9, whiteSpace: 'nowrap' }}>
+                {r.target ?? '—'}
+              </span>
+              <span style={{ fontFamily: T.mono, color: pink, fontSize: 11 }}>
+                {fmt(r.predicted_efficiency, 3)}
+              </span>
+              <span style={{ fontFamily: T.mono, fontSize: 9, fontWeight: 700, padding: '0 2px',
+                             color: ok ? '#00ff41' : dv ? '#ff4444' : T.textDim }}>
+                {ok ? 'Δ0' : dv ? `Δ${r.agreement.delta.toExponential(1)}` : '—'}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* ── footer ── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    marginTop: '4px' }}>
+        <div style={S.kv}>
+          <span style={{ color: T.textDim, fontSize: '11px' }}>HOTSPOTS</span>
+          <span style={{ color: pink, fontWeight: 700, textShadow: glow(pink, 2), fontSize: '11px' }}>
+            {n_hotspots || '—'}
+          </span>
+        </div>
+        <div style={S.kv}>
+          <span style={{ color: T.textDim, fontSize: '11px' }}>BEST_EFF</span>
+          <span style={{ color: T.cyan, fontWeight: 700, textShadow: glow(T.cyan, 2), fontSize: '11px' }}>
+            {fmt(best_efficiency, 4)}
+          </span>
+        </div>
+      </div>
+      <div style={{ marginTop: '4px', fontSize: '9px', color: T.textDim, textAlign: 'center',
+                    letterSpacing: '0.04em' }}>
+        {agreement?.checked
+          ? `${agreement.exact}/${agreement.checked} bit-exact vs validator path`
+          : 'agreement not yet observed'}
+        {model_sha256 ? ` · model ${model_sha256.slice(0, 8)}…` : ''}
+      </div>
+      <div style={{ fontSize: '9px', color: pinkDim, textAlign: 'center', letterSpacing: '0.1em',
+                    marginTop: '2px' }}>
+        LOG-ONLY · STAGE 4 · NOT SUBMITTED ON-CHAIN
+      </div>
+      <div style={{ fontSize: '9px', color: T.textDim, textAlign: 'center', marginTop: '4px',
+                    lineHeight: '12px', opacity: 0.75 }}>
+        Ranked computational predictions to narrow wet-lab candidate search. Not a cure;
+        does not replace experimental validation.
+      </div>
+
+      </div>{/* end right column */}
+      </div>{/* end two-column grid */}
     </Panel>
   )
 }
@@ -2388,6 +2787,7 @@ export default function App() {
   const [feed, setFeed] = useState([])
   const [pulse, setPulse] = useState(null)
   const [crispr, setCrispr] = useState(null)
+  const [peg,    setPeg]    = useState(null)
   const [tick, setTick] = useState(null)
   const [local, setLocal] = useState(false)
 
@@ -2446,9 +2846,28 @@ export default function App() {
     return () => clearInterval(id)
   }, [])
 
+  // pegRNA / prime editing poll — every 10s.
+  // Slower than CRISPR's 5s on purpose: the Stage 4 daemon only writes one
+  // hotspot per PEG_SWEEP_INTERVAL (30 min), so faster polling would just
+  // re-fetch identical data.
+  useEffect(() => {
+    async function pollPeg() {
+      try {
+        const r = await fetch('/peg?' + Date.now())
+        if (r.ok) setPeg(await r.json())
+      } catch {}
+    }
+    pollPeg()
+    const id = setInterval(pollPeg, 10000)
+    return () => clearInterval(id)
+  }, [])
+
   const alive     = pub?.alive              ?? false
   const mols      = pub?.molecules_screened ?? 0
   const life      = pub?.life_earned        ?? 0
+  const lifeConf  = pub?.life_confirmed     ?? 0
+  const txSub     = pub?.tx_submitted       ?? 0
+  const txConf    = pub?.tx_confirmed       ?? 0
   const tgts      = pub?.targets_contributed ?? []
   const network   = pub?.network            ?? {}
   const scoring   = pub?.scoring_history    ?? []
@@ -2501,7 +2920,7 @@ export default function App() {
             <MinerStatusPanel alive={alive} currentTarget={target}
                               minerId={minerId} lastUpdated={lastUpd} />
             <MoleculesPanel   count={mols} />
-            <LifeEarnedPanel  earned={life} />
+            <LifeEarnedPanel  earned={life} confirmed={lifeConf} txSub={txSub} txConf={txConf} />
             <GpuPowerPanel />
             {gpuWorkers.length > 1 && <GpuWorkersPanel workers={gpuWorkers} />}
             {/* ACTIVE TARGETS | LIVE SCORING FEED | CRISPR — three panels, one row */}
@@ -2523,6 +2942,15 @@ export default function App() {
             <ProteinNetPanel     proteinnet={pub?.proteinnet} />
             <CrisprNetPanel      crispr_net={pub?.crispr_net} />
             <LifeBrainPanel      life_brain={pub?.life_brain} />
+
+            {/* PRIME EDITING — full-width row. A 43-column (±21nt) helix gets
+                only 6px per base in a quarter-grid cell (unreadable) vs ~31px
+                here, so the DNA view is given the full span. */}
+            <div style={S.sectionLabel}>
+              <div style={S.sectionTick} />
+              PUBLIC // PRIME EDITING — pegRNA OPTIMIZATION
+            </div>
+            <PrimeEditingPanel   peg={peg} />
 
             {/* LIFE PULSE — always visible (public endpoint) */}
             <div style={S.sectionLabel}>

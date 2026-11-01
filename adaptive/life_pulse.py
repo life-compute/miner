@@ -36,12 +36,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import time
 from collections import deque
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
+
+_log = logging.getLogger(__name__)
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 LIFE_DIR   = Path(__file__).resolve().parents[1]
@@ -170,27 +173,56 @@ _RGROUPS: list[str] = [
 # 1.69 M drug-like SMILES; one per line, no ID column.
 # Quasi-random byte-seek: sobol_float → byte offset → skip partial line → read
 # next full line.  O(1) per sample, zero memory footprint, never exhausted.
-_ZINC15_PATH = LIFE_DIR / "data" / "zinc15_fragments.smi"
-_ZINC15_SIZE: int = 0   # cached on first call
+
+# Shards are addressed as one virtual corpus: the byte-fraction is spread across
+# every present file in order, so a shard contributes samples in proportion to
+# its size.  Adding a shard widens the search space without invalidating
+# state.next_index (the Sobol cursor is over fractions, not absolute offsets).
+# `tag` lands in each JSONL row as `corpus`, so bin-D and fragment molecules stay
+# distinguishable downstream (proxy/boltz comparisons, ART features).
+_ZINC15_SHARDS: list[tuple[str, Path]] = [
+    ("fragment", LIFE_DIR / "data" / "zinc15_fragments.smi"),  # bins B+C, 200-300 Da
+    ("binD",     LIFE_DIR / "data" / "zinc15_binD.smi"),       # bin D,   300-400 Da
+]
+_SHARD_INDEX: list[tuple[str, Path, int]] = []   # (tag, path, cumulative_size)
 
 
-def _zinc15_at(frac: float) -> Optional[str]:
-    """Return the SMILES nearest to byte-fraction *frac* ∈ [0, 1) in the ZINC15
-    file, or None if the file is absent / unreadable."""
-    global _ZINC15_SIZE
-    if not _ZINC15_PATH.exists():
+def _shard_index() -> list[tuple[str, Path, int]]:
+    """Cached (tag, path, cumulative_bytes) for every shard present on disk."""
+    global _SHARD_INDEX
+    if not _SHARD_INDEX:
+        total = 0
+        for tag, path in _ZINC15_SHARDS:
+            if not path.exists():
+                continue
+            total += path.stat().st_size
+            _SHARD_INDEX.append((tag, path, total))
+    return _SHARD_INDEX
+
+
+def _zinc15_at(frac: float) -> Optional[tuple[str, str]]:
+    """Return ``(smiles, shard_tag)`` nearest to byte-fraction *frac* ∈ [0, 1)
+    across all present ZINC shards, or None if unreadable."""
+    index = _shard_index()
+    if not index:
         return None
-    if _ZINC15_SIZE == 0:
-        _ZINC15_SIZE = _ZINC15_PATH.stat().st_size
-    byte_pos = int(frac * _ZINC15_SIZE)
+    total = index[-1][2]
+    byte_pos = int(frac * total)
+    for tag, path, cum in index:                            # first shard whose span contains pos
+        if byte_pos < cum:
+            offset = byte_pos - (cum - path.stat().st_size)
+            break
+    else:
+        tag, path = index[-1][0], index[-1][1]
+        offset = path.stat().st_size - 1
     try:
-        with _ZINC15_PATH.open("rb") as fh:
-            fh.seek(byte_pos)
+        with path.open("rb") as fh:
+            fh.seek(offset)
             fh.readline()                                   # skip partial line at seek
             line = fh.readline().decode("utf-8", errors="ignore").strip()
         if not line:
             return None
-        return line.split()[0]                              # bare SMILES (no ID column)
+        return line.split()[0], tag                         # bare SMILES (no ID column)
     except Exception:
         return None
 
@@ -729,10 +761,18 @@ def run_sweep(
     tanimoto_threshold: float     = 0.85,
     elite_fraction: float         = 0.10,
     use_mutants:   bool           = True,
-) -> None:
+) -> bool:
     """
     Sample ``max_configs`` molecules quasi-randomly from the vocab, score with
     proxy, append rows to life_pulse_data.jsonl.
+
+    Returns
+    -------
+    bool
+        ``True`` when the sweep is *exhausted* — it burned the full attempt
+        budget without evaluating a single new molecule (every candidate was
+        already in ``state.seen``).  Callers should back off rather than
+        immediately re-running.  ``False`` on any productive sweep.
 
     Parameters
     ----------
@@ -755,13 +795,15 @@ def run_sweep(
     evaluated     = 0
     attempts      = 0
     idx           = state.next_index
+    _capped       = False
 
     # ── Phase 1: Sobol sweep ──────────────────────────────────────────────────
-    _use_zinc15 = _ZINC15_PATH.exists()
+    _use_zinc15 = bool(_shard_index())
 
     while evaluated < max_configs:
         attempts += 1
         if attempts > _max_attempts:
+            _capped = True
             if verbose:
                 print(
                     f"[PULSE] capped at {_max_attempts} iterations "
@@ -771,18 +813,20 @@ def run_sweep(
 
         # ── Primary: ZINC15 byte-seek (unlimited, O(1) per sample) ───────────
         if _use_zinc15 and not (family_filter and family_filter in FAMILY_VOCAB):
-            frac   = sobol_float(idx, 0)
-            smiles = _zinc15_at(frac)
-            if smiles is None:
+            frac = sobol_float(idx, 0)
+            hit  = _zinc15_at(frac)
+            if hit is None:
                 idx += 1
                 continue
+            smiles, shard = hit
             canon = _canonical(smiles) if smiles else None
             row_meta = {
                 "source":        "pulse",
                 "family":        "zinc15",
-                "scaffold_name": "zinc15_fragment",
+                "scaffold_name": f"zinc15_{shard}",
                 "scaffold_smi":  smiles,
                 "rgroup_idx":    0,
+                "corpus":        shard,
             }
         else:
             # ── Fallback: scaffold vocab (family-filter or no ZINC15) ─────────
@@ -845,9 +889,36 @@ def run_sweep(
         evaluated += 1
         reporter.maybe_print(state, sizer)
 
+    # ── Fix 1: always advance the sweep window ────────────────────────────────
+    # Previously `state.next_index` was only bumped on a *successful*
+    # evaluation (line ~836).  When every candidate in the window was a
+    # duplicate, the local `idx` advanced but `state.next_index` stayed pinned,
+    # so the next batch rescanned the identical Sobol window forever — a silent
+    # CPU-burning spin at ~1000 attempts/s with zero progress.  Persisting the
+    # local cursor here guarantees the window genuinely moves forward even on a
+    # fully-duplicate batch.
+    if idx > state.next_index:
+        state.next_index = idx
+        state.save(STATE_JSON)
+
     sizer.report(n_requested=attempts, n_delivered=evaluated)
 
+    # ── Fix 2: hard exhaustion detection ──────────────────────────────────────
+    # Burning the full attempt budget with zero evaluations means every
+    # candidate the sampler can reach is already in `state.seen` — the
+    # vocabulary is exhausted.  Signal the caller so it backs off instead of
+    # re-entering immediately.
+    _exhausted = _capped and evaluated == 0
+    if _exhausted:
+        _log.warning(
+            "[PULSE] vocabulary exhausted — %d attempts, 0 new molecules "
+            "(seen=%d, next_index=%d). Backing off. Expand the ZINC15 source "
+            "or widen the scaffold vocab to resume progress.",
+            attempts, len(state.seen), state.next_index,
+        )
+
     # ── Phase 2: EliteMutator ─────────────────────────────────────────────────
+    _mutants_written = 0
     if use_mutants and state.elite_pool:
         mutant_target = max(10, int(max_configs * elite_fraction))
         mutants = mutator.generate(state=state, filter=tfilter)
@@ -866,11 +937,17 @@ def run_sweep(
             written += 1
         state.mutant_accepted += written
         state.save(STATE_JSON)
+        _mutants_written = written
         if verbose and written:
             print(f"[PULSE] +{written} mutant molecules from elite pool")
 
     if verbose:
         reporter.summary(state)
+
+    # Exhausted only if BOTH phases produced nothing new.  A productive mutant
+    # phase means the elite pool is still generating novel chemistry, so the
+    # caller should keep its fast cadence.
+    return _exhausted and _mutants_written == 0
 
 
 # ── Public helpers (used by miner_daemon.py) ───────────────────────────────────

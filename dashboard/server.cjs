@@ -102,6 +102,75 @@ function readJson(filePath) {
   catch { return null; }
 }
 
+/* ── pegRNA window reconstruction (Stage 4 panel support) ──────────────────
+ *
+ * Rebuilds the genomic window a logged pegRNA candidate was designed against,
+ * in the candidate's OWN strand frame, and refuses to return it unless the
+ * row's geometry provably reconstructs.
+ *
+ * STRAND FRAME — the trap this function exists to get right:
+ * Candidate offsets (pam_offset / nick_offset / edit_offset) index the strand
+ * the candidate was designed on, NOT the window as stored in the Stage 0.1
+ * reference JSON. For '-' strand rows that frame is the REVERSE COMPLEMENT of
+ * the stored window. Indexing the '+' window for a '-' row silently reads the
+ * wrong bases — 98 of the first 245 logged rows — which would render a helix
+ * strip of real-looking but incorrect sequence. That is exactly the class of
+ * decorative-but-wrong output the honesty rule forbids.
+ *
+ * Returns the window string, or null. null means "cannot be honestly rendered"
+ * and the caller MUST drop the row rather than substituting anything.
+ */
+const PEG_REF_DIR = path.join(ROOT, 'data', 'peg_reference');
+const pegRefCache = new Map();
+
+function pegRevcomp(seq) {
+  const C = { A: 'T', C: 'G', G: 'C', T: 'A', N: 'N' };
+  let out = '';
+  for (let i = seq.length - 1; i >= 0; i--) out += C[seq[i]] ?? 'N';
+  return out;
+}
+
+function pegLoadRef(gene) {
+  if (!pegRefCache.has(gene)) {
+    pegRefCache.set(gene, readJson(path.join(PEG_REF_DIR, `${gene}.json`)));
+  }
+  return pegRefCache.get(gene);
+}
+
+function pegWindow(r) {
+  if (!r || !r.gene || !r.hotspot_label || !r.strand) return null;
+  for (const f of ['spacer', 'pbs', 'rtt', 'wt_seq', 'edited_seq']) {
+    if (typeof r[f] !== 'string' || !r[f]) return null;
+  }
+  for (const f of ['pam_offset', 'nick_offset', 'edit_offset']) {
+    if (typeof r[f] !== 'number') return null;
+  }
+
+  const rec = pegLoadRef(r.gene);
+  if (!rec || !Array.isArray(rec.hotspots)) return null;
+  const hs = rec.hotspots.find(h => h && h.label === r.hotspot_label);
+  if (!hs || typeof hs.window !== 'string' || !hs.window) return null;
+
+  const w = r.strand === '+' ? hs.window : pegRevcomp(hs.window);
+
+  // The five invariants. Each was verified to hold on 250/250 logged rows;
+  // any future row that breaks one is dropped, not rendered.
+  const { spacer, pbs, rtt, wt_seq: wt, edited_seq: ed } = r;
+  const nick = r.nick_offset, edit = r.edit_offset, pam = r.pam_offset;
+
+  if (nick < 0 || nick > w.length || edit < 0 || edit >= w.length) return null;
+  if (nick - spacer.length < 0 || nick - pbs.length < 0)           return null;
+  if (w.slice(edit, edit + wt.length) !== wt)                      return null;
+  if (w.slice(nick - spacer.length, nick) !== spacer)               return null;
+  if (w.slice(pam + 1, pam + 3) !== 'GG')                           return null;
+  if (w.slice(nick - pbs.length, nick) !== pegRevcomp(pbs))         return null;
+
+  const edited = w.slice(0, edit) + ed + w.slice(edit + wt.length);
+  if (edited.slice(nick, nick + rtt.length) !== pegRevcomp(rtt))    return null;
+
+  return w;
+}
+
 /* ── Miner alive detection (robust — does not rely on stats.json "alive" field) ─
  *
  * Priority:
@@ -138,7 +207,6 @@ function isMinerAlive(s) {
 /* ── /stats — PUBLIC data ────────────────────────────────────────── */
 function buildPublicStats() {
   const s         = readJson(STATS) || {};
-  const artReport = readJson(path.join(OUT, 'life_art_report.json')) || {};
   // Read ALL boltz rows so early high scores (e.g. 0.0174 from day 1) are included.
   // tailJsonl(200) was silently dropping the best historical scores.
   const boltzRows = tailJsonl(path.join(OUT, 'life_boltz_scores.jsonl'), 100000);
@@ -189,6 +257,9 @@ function buildPublicStats() {
     miner_id:            getMinerPubkey(),
     molecules_screened:  s.molecules_screened  ?? 0,
     life_earned:         s.life_earned         ?? 0,
+    life_confirmed:      s.life_confirmed      ?? 0,
+    tx_submitted:        s.tx_submitted        ?? 0,
+    tx_confirmed:        s.tx_confirmed        ?? 0,
     targets_contributed: s.targets_contributed ?? [],
     scoring_history:     scoringHistory,
     network,
@@ -197,12 +268,6 @@ function buildPublicStats() {
     gpu_count:           s.gpu_count           ?? 1,
     gpu_workers:         s.gpu_workers         ?? [],
     ts:                  Date.now(),
-    art: {
-      ready:   artReport.ready  ?? false,
-      n_rows:  artReport.n_rows ?? 0,
-      r2:      artReport.r2     ?? null,
-      ts:      artReport.ts     ?? null,
-    },
     proteinnet: (() => {
       const report = readJson(path.join(OUT, 'protein_models', 'proteinnet_report.json')) || {};
       const models = report.models || {};
@@ -272,7 +337,6 @@ function buildPrivateStats() {
   const pulseState  = readJson(path.join(OUT, 'life_pulse_state.json')) || {};
   const pulseRows   = tailJsonl(path.join(OUT, 'life_pulse_data.jsonl'),   200);
   const scoutRows   = tailJsonl(path.join(OUT, 'life_scout_log.jsonl'),     50);
-  const artReport   = readJson(path.join(OUT, 'life_art_report.json'))   || {};
   const generated   = tailJsonl(path.join(OUT, 'life_generated.jsonl'),     20);
   const boltzRows   = tailJsonl(path.join(OUT, 'life_boltz_scores.jsonl'), 100);
   const lastScout   = scoutRows.length ? scoutRows[scoutRows.length - 1] : null;
@@ -303,17 +367,6 @@ function buildPrivateStats() {
         proxy_score: Math.round((r.proxy_score || 0) * 1000) / 1000,
       })),
     },
-    art: {
-      ready:             artReport.ready       ?? false,
-      n_rows:            artReport.n_rows      ?? 0,
-      r2:                artReport.r2          ?? null,
-      reason:            artReport.reason      ?? 'awaiting scores',
-      n_features:        artReport.n_features  ?? 525,
-      feature_importances: artReport.feature_importances ?? {},
-      boltz_accumulated: boltzCount,
-      retrain_progress:  retrainPct,
-      next_retrain_in:   nextRetrain,
-    },
     scout: {
       last_family:       lastScout?.family         || '—',
       last_phase:        lastScout?.phase          || '—',
@@ -326,7 +379,6 @@ function buildPrivateStats() {
     generated:           generated.map(r => ({
       smiles:       (r.smiles || '').slice(0, 60),
       method:       r.method      || '—',
-      art_score:    r.art_score   ?? null,
       boltz_score:  r.boltz_score ?? null,
       target:       r.target      || '?',
       ts:           r.ts          ? new Date(r.ts * 1000).toISOString() : null,
@@ -450,6 +502,7 @@ function buildAgentSystemPrompt() {
     current_target:      stats.current_target,
     molecules_screened:  stats.molecules_screened,
     life_earned:         stats.life_earned,
+    life_confirmed:      stats.life_confirmed,
     targets_contributed: stats.targets_contributed,
     network:             stats.network,
     last_updated:        stats.last_updated,
@@ -614,21 +667,38 @@ http.createServer(async (req, res) => {
   /* /crispr — public: last 10 CRISPR evaluations + summary */
   if (url === '/crispr') {
     try {
-      const rows = tailJsonl(path.join(OUT, 'life_crispr_scores.jsonl'), 10000);
+      // life_boltz_scores.jsonl is the live source (written by _crispr_loop in miner_daemon.py).
+      // Filter to target_type === 'CRISPR' rows; fall back to legacy life_crispr_scores.jsonl
+      // if the boltz file is missing or has no CRISPR rows.
+      let allRows = tailJsonl(path.join(OUT, 'life_boltz_scores.jsonl'), 50000)
+        .filter(r => r.target_type === 'CRISPR' || String(r.target_id ?? '').endsWith('_CRISPR'));
+      if (allRows.length === 0) {
+        allRows = tailJsonl(path.join(OUT, 'life_crispr_scores.jsonl'), 10000);
+      }
+      const rows = allRows;
       const recent = rows.slice(-10).reverse().map(r => ({
         target_id:  r.target_id  ?? '—',
-        grna_seq:   r.grna_seq   ?? '',
+        // boltz rows store gRNA in 'smiles'; legacy rows use 'grna_seq'
+        grna_seq:   r.grna_seq   ?? r.smiles ?? '',
         on_target:  typeof r.on_target  === 'number' ? Math.round(r.on_target  * 10000) / 10000 : null,
         off_target: typeof r.off_target === 'number' ? Math.round(r.off_target * 10000) / 10000 : null,
         delivery:   typeof r.delivery   === 'number' ? Math.round(r.delivery   * 10000) / 10000 : null,
         combined:   typeof r.combined   === 'number' ? Math.round(r.combined   * 10000) / 10000 : null,
         affinity:   typeof r.affinity   === 'number' ? Math.round(r.affinity   * 10000) / 10000 : null,
-        hit:        typeof r.combined   === 'number' && r.combined >= 0.5,
+        iptm:       typeof r.iptm       === 'number' ? Math.round(r.iptm       * 10000) / 10000 : null,
+        model:      r.model ?? null,
+        hit:        r.hit ?? (typeof r.combined === 'number' && r.combined >= 0.5),
         source:     'crispr_generated',
         ts:         r.ts ? new Date(r.ts * 1000).toISOString() : null,
       }));
       const latest = recent[0] ?? null;
-      const allCombined = rows.map(r => r.combined).filter(v => typeof v === 'number');
+      // boltz CRISPR rows use iptm as the quality metric; legacy rows use combined.
+      const allCombined = rows.map(r => {
+        if (typeof r.combined === 'number') return r.combined;
+        if (typeof r.iptm    === 'number') return r.iptm;
+        if (typeof r.boltz_score === 'number') return r.boltz_score;
+        return null;
+      }).filter(v => v !== null);
       const best = allCombined.length ? Math.max(...allCombined) : null;
       res.writeHead(200, {
         'Content-Type':                'application/json',
@@ -639,6 +709,147 @@ http.createServer(async (req, res) => {
         recent,
         total_evaluated: rows.length,
         best_combined:   best !== null ? Math.round(best * 10000) / 10000 : null,
+        ts: Date.now(),
+      }));
+    } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: String(e) })); }
+    return;
+  }
+
+  /* /peg — public: Stage 4 pegRNA / prime-editing evaluations + agreement
+   *
+   * Source: output/life_peg_daemon_scores.jsonl, written by _peg_loop in
+   * miner_daemon.py (Stage 4, LOG-ONLY — every row has submitted=false).
+   * Agreement: output/life_peg_observer.jsonl, written by scripts/peg_observer.py,
+   * which recomputes each row through the stdlib validator path (peg_model.json).
+   *
+   * HONESTY CONTRACT — a row is only emitted if its geometry reconstructs
+   * against the Stage 0.1 reference window. pegWindow() returns null on any
+   * invariant failure and the row is dropped, so the panel can never render a
+   * helix, a base, or a before/after diff that does not correspond to real
+   * logged candidate data. There is no placeholder path.
+   *
+   * No scoring, no threshold, no HIT/MISS: Stage 5 has not set a tolerance, so
+   * the only verdict reported is the real miner-vs-validator delta.
+   */
+  if (url === '/peg') {
+    try {
+      const rows = tailJsonl(path.join(OUT, 'life_peg_daemon_scores.jsonl'), 50000);
+
+      // Agreement index, keyed ts|rank to match the observer's resume key.
+      const obsRows = tailJsonl(path.join(OUT, 'life_peg_observer.jsonl'), 50000);
+      const obsByKey = new Map();
+      for (const o of obsRows) obsByKey.set(`${o.ts}|${o.rank}`, o);
+
+      const HELIX_RADIUS = 21;   // ±21nt → 43 columns
+
+      const decorate = (r) => {
+        const w = pegWindow(r);
+        if (!w) return null;    // invariants failed → not renderable → dropped
+
+        const editLen  = String(r.wt_seq).length;
+        const edited   = w.slice(0, r.edit_offset) + r.edited_seq
+                       + w.slice(r.edit_offset + editLen);
+
+        // Helix slice, clamped to the window; offsets re-based to the slice.
+        const from = Math.max(0, r.edit_offset - HELIX_RADIUS);
+        const to   = Math.min(w.length, r.edit_offset + HELIX_RADIUS + 1);
+        const obs  = obsByKey.get(`${r.ts}|${r.rank}`) ?? null;
+
+        return {
+          gene:          r.gene ?? null,
+          hotspot_label: r.hotspot_label ?? null,
+          target:        r.gene && r.hotspot_label ? `${r.gene}/${r.hotspot_label}` : null,
+          strand:        r.strand ?? null,
+          spacer:        r.spacer ?? null,
+          pbs:           r.pbs ?? null,
+          rtt:           r.rtt ?? null,
+          edit_type:     r.edit_type ?? null,
+          wt_seq:        r.wt_seq ?? null,
+          edited_seq:    r.edited_seq ?? null,
+          predicted_efficiency: typeof r.predicted_efficiency === 'number'
+            ? r.predicted_efficiency : null,
+          rank:              r.rank ?? null,
+          n_candidates:      r.n_candidates ?? null,
+          genomic_edit_pos:  r.genomic_edit_pos ?? null,
+          nick_to_edit:      r.nick_to_edit ?? null,
+          correction_length: r.correction_length ?? null,
+          model_sha256:      r.model_sha256 ?? null,
+          submitted:         r.submitted === true,
+          ts: r.ts ? new Date(r.ts * 1000).toISOString() : null,
+
+          // Real reconstructed sequence, ±21nt around the edit.
+          helix: {
+            wt:     w.slice(from, to),
+            edited: edited.slice(from, to),
+            offset: from,
+            edit_index: r.edit_offset - from,
+            edit_len:   editLen,
+            nick_index: r.nick_offset - from,
+            pam_index:  r.pam_offset - from,
+            pam:        w.slice(r.pam_offset, r.pam_offset + 3),
+            spacer_start: (r.nick_offset - String(r.spacer).length) - from,
+            spacer_len:   String(r.spacer).length,
+            pbs_start:    (r.nick_offset - String(r.pbs).length) - from,
+            pbs_len:      String(r.pbs).length,
+            rtt_start:    r.nick_offset - from,
+            rtt_len:      String(r.rtt).length,
+          },
+
+          // null until the observer has actually checked this row — the panel
+          // renders PENDING rather than implying agreement.
+          agreement: obs ? {
+            status:        obs.status ?? null,
+            miner_eff:     typeof obs.miner_eff === 'number' ? obs.miner_eff : null,
+            validator_eff: typeof obs.validator_eff === 'number' ? obs.validator_eff : null,
+            delta:         typeof obs.delta === 'number' ? obs.delta : null,
+            exact:         obs.exact === true,
+            reason:        obs.reason || null,
+          } : null,
+        };
+      };
+
+      const recent = rows.slice(-10).reverse().map(decorate).filter(Boolean);
+      const latest = recent[0] ?? null;
+
+      const effs = rows
+        .map(r => (typeof r.predicted_efficiency === 'number' ? r.predicted_efficiency : null))
+        .filter(v => v !== null);
+
+      const hotspots = new Set(
+        rows.filter(r => r.gene && r.hotspot_label)
+            .map(r => `${r.gene}/${r.hotspot_label}`)
+      );
+
+      // Corpus-wide agreement, independent of the last-10 window.
+      const checked    = obsRows.filter(o => typeof o.delta === 'number');
+      const nExact     = checked.filter(o => o.exact === true).length;
+      const maxDelta   = checked.length ? Math.max(...checked.map(o => o.delta)) : null;
+      const agreement  = {
+        checked:      checked.length,
+        exact:        nExact,
+        divergent:    checked.length - nExact,
+        unobservable: obsRows.length - checked.length,
+        max_delta:    maxDelta,
+        status:       checked.length === 0 ? 'PENDING'
+                    : nExact === checked.length ? 'EXACT' : 'DIVERGENT',
+        method: 'peg_model.json stdlib tree walk vs miner sklearn prediction',
+      };
+
+      res.writeHead(200, {
+        'Content-Type':                'application/json',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(JSON.stringify({
+        latest,
+        recent,
+        agreement,
+        total_evaluated: rows.length,
+        n_renderable:    recent.length,
+        n_hotspots:      hotspots.size,
+        best_efficiency: effs.length ? Math.max(...effs) : null,
+        model_sha256:    rows.length ? (rows[rows.length - 1].model_sha256 ?? null) : null,
+        stage:           4,
+        mode:            'log_only',
         ts: Date.now(),
       }));
     } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: String(e) })); }

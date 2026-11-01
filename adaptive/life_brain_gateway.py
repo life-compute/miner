@@ -10,7 +10,8 @@ at startup, exactly as life_proteinnet.py reads its .pkl files.
 
 ISOLATION GUARANTEES
 --------------------
-- CPU-only: CUDA_VISIBLE_DEVICES="" set before any torch import.
+- CPU-only: torch is imported only inside _load_model() / pre_screen functions,
+  always with map_location="cpu" / device("cpu"). No global env mutation.
 - If the model file is absent or a branch is not trusted, returns None
   and the caller's existing fallback runs unchanged — zero regression risk.
 - life_brain_runner.py (separate PM2 process) owns all training.
@@ -31,9 +32,6 @@ import os
 import time
 from pathlib import Path
 from typing import Optional
-
-# Belt-and-suspenders CPU enforcement at import time
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
 log = logging.getLogger("life-miner")   # same logger as miner_daemon.py
 

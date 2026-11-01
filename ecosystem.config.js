@@ -31,6 +31,27 @@ module.exports = {
       watch: false,
     },
     {
+      // LIFE mint_reward crank — permissionless, runs every 120s.
+      // Drains all Confirmed + reward_minted=false ResultSubmission PDAs.
+      // Dedup logic (ConfirmedMolecule PDA) ensures each unique SMILES+target
+      // pair mints exactly once regardless of how many wallets submitted it.
+      // Re-runs automatically; PM2 restarts on crash with exponential backoff.
+      name: 'life-mint-crank',
+      script: 'life_mint_crank_loop.sh',
+      interpreter: 'bash',
+      cwd: '/tmp/life-compute/core',
+      env_file: '/mnt/minos-drive/life-compute-miner/.env',
+      env: {
+        CRANK_KEYPAIR: '/tmp/life-compute-dev-keypair.json',
+        MINT_CRANK_DELAY: '120',
+      },
+      autorestart: true,
+      max_restarts: 20,
+      exp_backoff_restart_delay: 5000,
+      watch: false,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+    },
+    {
       // LIFE-BRAIN — Network-wide self-learning system.
       // Fully independent of life-miner and life-validator.
       // CPU-only: CUDA_VISIBLE_DEVICES="" is set inside life_brain_runner.py

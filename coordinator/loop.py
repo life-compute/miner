@@ -75,6 +75,52 @@ if TYPE_CHECKING:
 from coordinator.hashes import PinnedHashError, verify_protein_target  # noqa: E402
 from coordinator.shards import ShardManager  # noqa: E402 — module-level so patch() can find it
 
+# ── Failure classification (C26) ────────────────────────────────────────────
+#
+# Per-molecule failures: a single molecule that cannot be scored due to a
+# property of that specific molecule (bad SMILES, unparseable conformer, mol
+# too large, 3D-embedding failure, RDKit ValueError).  These do NOT count as
+# systemic failures; the miner skips the molecule and reports it in the
+# skip-reason summary.
+#
+# Systemic failures: the scorer process crashed, timed out, ran OOM, or an
+# import failed.  These count toward MAX_SCORER_FAILURES and the rolling 95%
+# window check.  After 5 consecutive systemic failures OR >95% systemic in
+# the last FAIL_RATE_WINDOW molecules, the lease is abandoned.
+
+class PerMoleculeError(Exception):
+    """Raised inside _score_protein/_score_mrna when the failure is specific
+    to this molecule (bad SMILES, conformer, too large, etc.) and not systemic.
+    The caller catches this and counts it as a skipped molecule."""
+
+# Keywords in scorer stderr/stdout that indicate a per-molecule problem.
+# Any line matching one of these patterns is classified as PerMoleculeError.
+_PER_MOL_PATTERNS = [
+    "Failed to compute 3D conformer",
+    "3d conformer",
+    "Cannot sanitize",
+    "SMILES Parse Error",
+    "invalid smiles",
+    "unparseable smiles",
+    "molecule too large",
+    "mol too large",
+    "num_atoms",
+    "AtomValenceException",
+    "SmilesParseError",
+    "Kekulize",
+    "BadMolecule",
+    "rdkit",
+    "ValueError:",
+]
+
+def _is_per_molecule_error(stderr: str, stdout: str) -> tuple[bool, str]:
+    """Return (True, reason) if the error text matches a per-molecule pattern."""
+    combined = (stderr + stdout).lower()
+    for pat in _PER_MOL_PATTERNS:
+        if pat.lower() in combined:
+            return True, pat
+    return False, ""
+
 log = logging.getLogger(__name__)
 
 # ── Paths ──────────────────────────────────────────────────────────────────
@@ -91,10 +137,15 @@ BOLTZ_JSONL = _WORK_DIR / "output" / "life_boltz_scores.jsonl"
 NOVA_DIR: Path  = Path("/mnt/minos-drive/nova_subnet")
 NOVA_VENV: Path = NOVA_DIR / ".venv" / "bin" / "python3"
 
-# Consecutive-scorer-failure threshold before the lease is abandoned (Fix C25).
-# Only scorer failures (None / non-finite result) count; candidate-too-long and
-# cursor-skip do not count.  Reset to 0 on the first successful score.
+# Consecutive-scorer-failure threshold before the lease is abandoned (Fix C25/C26).
+# Only SYSTEMIC failures count (GPU unavailable, import error, scorer crash/timeout,
+# OOM).  Per-molecule failures (bad SMILES, unparseable conformer, mol too large)
+# are counted as skipped_mol and do NOT count toward this limit.
 MAX_SCORER_FAILURES: int = int(os.environ.get("COORD_MAX_SCORER_FAILURES", "5"))
+
+# Rolling window for the 95%-failure rate check.
+# If >95% of the last FAIL_RATE_WINDOW molecules are systemic failures, abandon lease.
+FAIL_RATE_WINDOW: int = 200
 
 # ── Boltz subprocess helper template ──────────────────────────────────────
 # Runs inside NOVA_VENV which has boltz 2.2.1 + nova_pulse_scorer available.
@@ -543,10 +594,17 @@ def _score_protein(
             except Exception:
                 pass
     except Exception as exc:
+        # C26: classify exception — timeout and process errors are systemic
         wlog.warning("[COORD] protein scoring subprocess error %s: %s", smiles[:40], exc)
         return None
 
     if r.returncode != 0:
+        # C26: classify failure — per-molecule vs systemic
+        is_mol_err, reason = _is_per_molecule_error(r.stderr, r.stdout)
+        if is_mol_err:
+            raise PerMoleculeError(
+                f"Per-molecule error for {smiles[:40]!r}: {reason}"
+            )
         wlog.warning("[COORD] protein scoring failed %s (rc=%d): %s",
                      smiles[:40], r.returncode, r.stderr[-300:])
         return None
@@ -573,6 +631,9 @@ def _score_mrna(
     Uses run_boltz2_mrna_scoring from miner_daemon.  Profile lock is a known
     gap (no mRNA equivalent of score_batch_with_profile exists yet); the
     coordinator scorer_profile is not applied to mRNA calls.
+
+    Raises PerMoleculeError on per-molecule failures (ValueError, bad SMILES).
+    Returns None on systemic failures (import error, process crash).
     """
     try:
         import sys
@@ -582,6 +643,9 @@ def _score_mrna(
         target_dict = {"id": target_id, "uniprot_id": "", "gene_name": target_id}
         result = run_boltz2_mrna_scoring(smiles, target_dict)
         return result.get("kcal")   # float or None
+    except ValueError as exc:
+        # C26: per-molecule — bad SMILES, unparseable molecule, etc.
+        raise PerMoleculeError(f"mRNA per-molecule error for {smiles[:40]!r}: {exc}") from exc
     except Exception as exc:
         wlog.warning("[COORD] mRNA scoring failed for %s: %s", smiles[:40], exc)
         return None
@@ -700,9 +764,12 @@ def coordinator_cycle(
     # ── 6. Shard iteration ───────────────────────────────────────────
     sm             = ShardManager()
     scored         = 0     # molecules with a finite contract_score that were enqueued
-    failed         = 0     # molecules where scoring returned None or non-finite
+    failed         = 0     # SYSTEMIC failures (count toward abandon threshold)
     skipped        = 0     # cursor-resume skips
-    consec_fail    = 0     # consecutive scorer failures (reset on any success)
+    skipped_mol    = 0     # per-molecule failures (bad SMILES, conformer, too large)
+    consec_fail    = 0     # consecutive SYSTEMIC failures (reset on any success)
+    fail_history: list[bool] = []    # rolling window for 95% rate check (True=systemic)
+    skip_reasons: dict[str, int] = {}  # reason → count for summary line
 
     for smiles, shard_id, row in sm.iter_molecules(lease.shards):
         # Lease-expiry mid-run check
@@ -730,28 +797,50 @@ def coordinator_cycle(
         # ── 7. Score ─────────────────────────────────────────────────
         t0 = time.time()
         raw_score: Optional[float] = None
+        per_mol_skip = False
 
-        if lease.modality == "protein":
-            raw_score = _score_protein(
-                smiles, lease.target,
-                msa_path, protein_sequence,  # type: ignore[arg-type]
-                lease.scorer_profile, wlog,
+        try:
+            if lease.modality == "protein":
+                raw_score = _score_protein(
+                    smiles, lease.target,
+                    msa_path, protein_sequence,  # type: ignore[arg-type]
+                    lease.scorer_profile, wlog,
+                )
+            elif lease.modality == "mrna":
+                raw_score = _score_mrna(smiles, lease.target, wlog)
+        except PerMoleculeError as per_err:
+            # C26: per-molecule failure — skip, log reason, do NOT count as systemic
+            reason_str = str(per_err)
+            short_reason = reason_str[:60]
+            skip_reasons[short_reason] = skip_reasons.get(short_reason, 0) + 1
+            skipped_mol += 1
+            per_mol_skip = True
+            wlog.info(
+                "[COORD] SKIP_MOL shard=%s row=%d  mol=%s…  reason=%s",
+                shard_id, row, smiles[:40], short_reason,
             )
-        elif lease.modality == "mrna":
-            raw_score = _score_mrna(smiles, lease.target, wlog)
+            # Advance cursor so we don't retry this molecule on restart
+            _save_cursor(lease.lease_id, shard_id, row)
+
+        if per_mol_skip:
+            continue
 
         elapsed = time.time() - t0
 
         # Convert to contract score
         contract_score = _to_contract_score(raw_score, lease.modality)
 
-        # ── NaN / non-finite guard (Fix C25) ─────────────────────────
+        # ── NaN / non-finite guard (Fix C25/C26) ─────────────────────
+        # A None or non-finite contract_score means a SYSTEMIC failure.
         # A None or non-finite contract_score must never be enqueued,
         # posted, or counted as scored.  The cursor must NOT advance past
         # this molecule until a finite score is produced.
         if contract_score is None or not math.isfinite(contract_score):
             failed      += 1
             consec_fail += 1
+            fail_history.append(True)
+            if len(fail_history) > FAIL_RATE_WINDOW:
+                fail_history.pop(0)
             wlog.warning(
                 "[COORD] SCORE_FAIL shard=%s row=%d  mol=%s…  raw=%s  contract=%s  %.1fs"
                 "  (consec=%d/%d)",
@@ -769,17 +858,28 @@ def coordinator_cycle(
             })
             if consec_fail >= MAX_SCORER_FAILURES:
                 wlog.error(
-                    "[COORD] LEASE_ABANDONED: %d consecutive scorer failures on lease %s"
+                    "[COORD] LEASE_ABANDONED: %d consecutive SYSTEMIC scorer failures on lease %s"
                     " — abandoning (consec_fail=%d >= MAX_SCORER_FAILURES=%d)",
                     consec_fail, lease.lease_id[:12],
                     consec_fail, MAX_SCORER_FAILURES,
                 )
                 break
+            # C26: rolling 95% rate check
+            if len(fail_history) >= FAIL_RATE_WINDOW:
+                systemic_rate = sum(fail_history) / len(fail_history)
+                if systemic_rate > 0.95:
+                    wlog.error(
+                        "[COORD] LEASE_ABANDONED: >95%% systemic failure rate in last %d mols"
+                        " (rate=%.2f) on lease %s",
+                        FAIL_RATE_WINDOW, systemic_rate, lease.lease_id[:12],
+                    )
+                    break
             # Do NOT save cursor — do not advance past a molecule that failed scoring
             continue
 
         # Score is finite: reset consecutive-failure counter
         consec_fail = 0
+        fail_history.append(False)
 
         mol_hash      = molecule_hash(smiles)
         hit_threshold = lease.hit_threshold
@@ -848,9 +948,12 @@ def coordinator_cycle(
 
     if skipped:
         wlog.info("[COORD] skipped %d already-processed molecules (cursor resume)", skipped)
+    # C26: extended summary — scored, skipped_mol (per-molecule), failed (systemic), skipped (cursor)
+    top_reasons = sorted(skip_reasons.items(), key=lambda x: -x[1])[:3]
+    reasons_str = "; ".join(f"{r} ×{n}" for r, n in top_reasons) if top_reasons else "none"
     wlog.info(
-        "[COORD] lease %s done — scored=%d  failed=%d  skipped=%d  target=%s",
-        lease.lease_id[:12], scored, failed, skipped, lease.target,
+        "[COORD] lease %s done — scored=%d  skipped_mol=%d(%s)  failed_systemic=%d  cursor_skip=%d  target=%s",
+        lease.lease_id[:12], scored, skipped_mol, reasons_str, failed, skipped, lease.target,
     )
     _clear_cursor()
 
