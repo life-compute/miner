@@ -333,6 +333,8 @@ def _get_or_create_client(gpu_idx: int = 0) -> "CoordinatorClient":
         fallback_url=fallback_url,
         worker_name=worker_name,
     )
+    # C28: drop queued results whose leases have already expired before starting drain
+    client.drop_stale_queued_results()
     _CLIENT_CACHE[gpu_idx] = client
     return client
 
@@ -914,6 +916,7 @@ def coordinator_cycle(
             shard_id=shard_id,
             shard_row=row,
             miner_gpu_model=gpu_model,
+            expires_at=lease.expires_at,  # C28: used for startup stale-drop
         )
 
         # ── 9. Audit JSONL ───────────────────────────────────────────

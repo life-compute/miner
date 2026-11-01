@@ -68,6 +68,10 @@ class QueuedResult:
     # internal tracking
     attempts: int = 0
     first_queued_ts: float = field(default_factory=time.time)
+    # C28: lease expiry (Unix ms) — 0 means unknown; used for startup stale-drop
+    expires_at: int = 0
+    # C28: 404-specific retry count — separate from general attempts
+    not_found_attempts: int = 0
 
 
 @dataclass
@@ -236,6 +240,7 @@ class CoordinatorClient:
         shard_id: Optional[int] = None,
         shard_row: Optional[int] = None,
         miner_gpu_model: Optional[str] = None,
+        expires_at: int = 0,
     ) -> None:
         """
         Persist a scored result to the durable queue and kick the drain loop.
@@ -244,6 +249,10 @@ class CoordinatorClient:
         The candidate field must not exceed MAX_CANDIDATE_BYTES characters.
         If it does, the result is dropped (never sent in any altered form),
         an error is logged, and the caller carries on.
+
+        expires_at (C28): Unix milliseconds when the lease expires.  If set,
+        the drain loop drops the item at start-up when the expiry has passed.
+        Pass 0 (default) when unknown.
         """
         if len(candidate) > MAX_CANDIDATE_BYTES:
             log.error(
@@ -261,6 +270,7 @@ class CoordinatorClient:
             shard_id=shard_id,
             shard_row=shard_row,
             miner_gpu_model=miner_gpu_model,
+            expires_at=expires_at,
         )
         self._append_queue(item)
         self._ensure_drain_running()
@@ -353,6 +363,9 @@ class CoordinatorClient:
         Try to POST /results for one item.
         Returns True if the coordinator accepted it (200) or it's a dup (409).
         Returns False on any retriable failure (network error, 5xx, etc.).
+
+        C28: 404 (lease not found or expired) is retried at most 3 times.
+        On the 4th 404 the item is dropped with a single log line.
         """
         path = "/results"
         body_dict: dict = {
@@ -383,6 +396,25 @@ class CoordinatorClient:
                     log.info("[COORD] POST /results 409 duplicate — treating as accepted  mol=%s",
                              item.molecule_hash)
                     return True
+                if status == 404:
+                    # C28: 404 = lease not found or expired.
+                    # Retry up to 3 times; on the 4th 404 drop the item permanently.
+                    item.not_found_attempts += 1
+                    if item.not_found_attempts >= 3:
+                        log.warning(
+                            "[COORD] POST /results 404 × %d (lease not found/expired)"
+                            " — dropping mol=%s permanently",
+                            item.not_found_attempts, item.molecule_hash,
+                        )
+                        return True   # drop from queue
+                    # Persist the updated not_found_attempts count back to the queue
+                    self._update_not_found_attempts(item)
+                    log.warning(
+                        "[COORD] POST /results 404 (lease not found/expired)"
+                        " mol=%s attempt %d/3 — will retry",
+                        item.molecule_hash, item.not_found_attempts,
+                    )
+                    return False   # retry later
                 if status == 410:
                     log.warning("[COORD] POST /results 410 lease expired  mol=%s — dropping",
                                 item.molecule_hash)
@@ -396,6 +428,27 @@ class CoordinatorClient:
                 log.warning("[COORD] POST /results to %s network error: %s", base, e)
         return False
 
+    def _update_not_found_attempts(self, item: QueuedResult) -> None:
+        """Rewrite the JSONL queue with the updated not_found_attempts for this item."""
+        with self._lock:
+            if not self.queue_path.exists():
+                return
+            lines = self.queue_path.read_text().splitlines()
+            updated: list[str] = []
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    d = json.loads(line)
+                    if d.get("molecule_hash") == item.molecule_hash:
+                        d["not_found_attempts"] = item.not_found_attempts
+                        updated.append(json.dumps(d))
+                        continue
+                except Exception:
+                    pass
+                updated.append(line)
+            self.queue_path.write_text("\n".join(updated) + ("\n" if updated else ""))
+
     # ------------------------------------------------------------------
     # Start / stop
     # ------------------------------------------------------------------
@@ -407,3 +460,31 @@ class CoordinatorClient:
     def stop(self) -> None:
         """Signal the drain loop to stop."""
         self._stop_event.set()
+
+    # ------------------------------------------------------------------
+    # C28: Start-up stale-lease drop
+    # ------------------------------------------------------------------
+
+    def drop_stale_queued_results(self) -> int:
+        """
+        C28: Drop any queued result whose lease has already expired.
+
+        Call once at miner start-up before kicking the drain loop.
+        Returns the count of items dropped and logs a single summary line.
+
+        An item is stale when expires_at > 0 and expires_at < time.time()*1000.
+        Items with expires_at == 0 (old JSONL rows without the field) are kept.
+        """
+        now_ms = int(time.time() * 1000)
+        items = self._load_queue()
+        dropped = 0
+        for item in items:
+            if item.expires_at and item.expires_at < now_ms:
+                self._remove_from_queue(item.molecule_hash)
+                dropped += 1
+        if dropped:
+            log.info(
+                "[COORD] start-up: dropped %d stale queued result(s) with expired leases",
+                dropped,
+            )
+        return dropped
