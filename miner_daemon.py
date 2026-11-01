@@ -2061,6 +2061,10 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
     wlog.propagate = False
 
     wlog.info(f"Worker started — GPU {gpu_idx}/{gpu_count-1}, CUDA_VISIBLE_DEVICES={gpu_idx}")
+    wlog.info(
+        f"[COORD-DIAG] pid={os.getpid()} COORDINATOR_MODE={COORDINATOR_MODE!r} "
+        f"(env='{os.environ.get('COORDINATOR_MODE', '')}')"
+    )
 
     # Worker-local state
     targets:           list             = []
@@ -2106,6 +2110,27 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
     while True:
         now = time.time()
 
+        # ── COORDINATOR_MODE fast-path ────────────────────────────────────────
+        # When COORDINATOR_MODE=True the miner operates under a remote lease:
+        # it fetches work from the coordinator, scores the assigned shards with
+        # the locked scorer profile, and posts results via the durable queue.
+        # PULSE, Brain pre-screen, ChEMBL downloads and model training do NOT
+        # run in this mode (the on-chain target/molecule selection is replaced
+        # by coordinator-assigned shards).  The old path (run_boltz2_scoring /
+        # submit_on_chain) is never reached when the flag is set.
+        # NOTE: placed BEFORE the target-refresh block so coordinator mode
+        # never calls fetch_targets() — all work comes from the coordinator lease.
+        if COORDINATOR_MODE:
+            wlog.info(
+                f"[COORD-DIAG] pid={os.getpid()} taking coordinator branch (gpu_worker)"
+            )
+            from coordinator.loop import _get_or_create_client, coordinator_cycle
+            _coord_client = _get_or_create_client(gpu_idx)
+            coordinator_cycle(wlog, _coord_client, shared_stats, gpu_idx)
+            time.sleep(POLL_SECONDS)
+            continue
+        # ── End of COORDINATOR_MODE fast-path ────────────────────────────────
+
         if now - last_refresh > TARGET_REFRESH or not targets:
             targets = fetch_targets()
             if not targets:
@@ -2121,22 +2146,6 @@ def gpu_worker(gpu_idx: int, gpu_count: int, shared_stats: dict) -> None:
             last_refresh = now
 
         _maybe_advance_epoch()
-
-        # ── COORDINATOR_MODE fast-path ────────────────────────────────────────
-        # When COORDINATOR_MODE=True the miner operates under a remote lease:
-        # it fetches work from the coordinator, scores the assigned shards with
-        # the locked scorer profile, and posts results via the durable queue.
-        # PULSE, Brain pre-screen, ChEMBL downloads and model training do NOT
-        # run in this mode (the on-chain target/molecule selection is replaced
-        # by coordinator-assigned shards).  The old path (run_boltz2_scoring /
-        # submit_on_chain) is never reached when the flag is set.
-        if COORDINATOR_MODE:
-            from coordinator.loop import _get_or_create_client, coordinator_cycle
-            _coord_client = _get_or_create_client(gpu_idx)
-            coordinator_cycle(wlog, _coord_client, shared_stats, gpu_idx)
-            time.sleep(POLL_SECONDS)
-            continue
-        # ── End of COORDINATOR_MODE fast-path ────────────────────────────────
 
         target = targets[target_idx % len(targets)]
         target_idx += gpu_count  # skip by gpu_count so workers stay spread
@@ -2375,6 +2384,26 @@ def main():
     ref_last_screened  : dict[str, float] = {}
     best_boltz_smiles  : list[str]        = []   # recent high-scorers for generative seeding
     sub_memory = SubmissionMemory() if _TOOLS_AVAILABLE else None
+
+    # ── COORDINATOR_MODE single-GPU fast-path ─────────────────────────────────
+    # When GPU_COUNT==1 the main() function runs the loop directly (not via
+    # gpu_worker).  We must mirror the coordinator branch here so the flag is
+    # honoured in the single-GPU case too.  The background startup tasks below
+    # (ChEMBL, PULSE, ProteinNet, CRISPR-NET, CRISPR loop, pegRNA) do NOT run
+    # in coordinator mode — all work comes from the coordinator's signed lease.
+    if COORDINATOR_MODE:
+        log.info("[COORD] COORDINATOR_MODE=true — entering coordinator loop (single-GPU path)")
+        log.info(
+            f"[COORD-DIAG] pid={os.getpid()} COORDINATOR_MODE={COORDINATOR_MODE!r} "
+            f"(env='{os.environ.get('COORDINATOR_MODE', '')}') taking coordinator branch (main/single-GPU)"
+        )
+        from coordinator.loop import _get_or_create_client, coordinator_cycle
+        _coord_client_main = _get_or_create_client(0)
+        shared_stats_main: dict = {}
+        while True:
+            coordinator_cycle(log, _coord_client_main, shared_stats_main, 0)
+            time.sleep(POLL_SECONDS)
+        return  # unreachable; here for static analysers
 
     # ChEMBL actives — background pre-download (cache-first, non-fatal)
     if _TOOLS_AVAILABLE:
