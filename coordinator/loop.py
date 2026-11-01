@@ -95,6 +95,15 @@ class PerMoleculeError(Exception):
 
 # Keywords in scorer stderr/stdout that indicate a per-molecule problem.
 # Any line matching one of these patterns is classified as PerMoleculeError.
+#
+# Boltz-specific patterns (C30):
+#   "Failed to process"  — Boltz prints this when it cannot featurize/parse a
+#       ligand SMILES.  The structure stage is skipped, no .npz is written, and
+#       the affinity stage raises FileNotFoundError (which propagates through the
+#       DataLoader worker).  The runner then sees an empty metrics dict and raises
+#       RescoreFailed.  The parent catches rc=1 and re-checks this pattern.
+#   "Skipping. Error:"   — the message Boltz appends after the path above.
+#   "GetAtoms"           — RDKit's NoneType.GetAtoms when SMILES is unparseable.
 _PER_MOL_PATTERNS = [
     "Failed to compute 3D conformer",
     "3d conformer",
@@ -111,13 +120,26 @@ _PER_MOL_PATTERNS = [
     "BadMolecule",
     "rdkit",
     "ValueError:",
+    # Boltz-level per-input skip patterns (C30)
+    "Failed to process",
+    "Skipping. Error:",
+    "GetAtoms",
 ]
 
 def _is_per_molecule_error(stderr: str, stdout: str) -> tuple[bool, str]:
-    """Return (True, reason) if the error text matches a per-molecule pattern."""
-    combined = (stderr + stdout).lower()
+    """Return (True, reason_line) if the error text matches a per-molecule pattern.
+
+    reason_line is the first matching line from the combined output, up to 300
+    characters — enough for a SKIP_MOL log entry and test assertions.
+    """
+    combined = stderr + stdout
+    combined_lower = combined.lower()
     for pat in _PER_MOL_PATTERNS:
-        if pat.lower() in combined:
+        if pat.lower() in combined_lower:
+            # Return the actual matching line for a human-readable log message.
+            for line in combined.splitlines():
+                if pat.lower() in line.lower():
+                    return True, line.strip()[:300]
             return True, pat
     return False, ""
 
@@ -659,11 +681,14 @@ def _score_protein(
         # Exit code 2 = per-molecule error (helper exited via PerMoleculeError /
         # ValueError branch); exit code 1 = systemic.
         if r.returncode == 2:
-            reason = r.stderr.strip()[:120] or "per-molecule error (rc=2)"
+            reason = (r.stderr + r.stdout).strip()[:300] or "per-molecule error (rc=2)"
             raise PerMoleculeError(
                 f"Per-molecule error for {smiles[:40]!r}: {reason}"
             )
-        # rc=1 or other — also check text patterns for safety (C26 compat)
+        # rc=1 or other — also check text patterns (C26/C30):
+        # Boltz may print "Failed to process <input>. Skipping." then exit
+        # non-zero via the runner's RescoreFailed path; reclassify those as
+        # PerMoleculeError so they do NOT count toward the systemic abandon limit.
         is_mol_err, reason = _is_per_molecule_error(r.stderr, r.stdout)
         if is_mol_err:
             raise PerMoleculeError(
@@ -877,10 +902,11 @@ def coordinator_cycle(
             elif lease.modality == "mrna":
                 raw_score = _score_mrna(smiles, lease.target, wlog)
         except PerMoleculeError as per_err:
-            # C26: per-molecule failure — skip, log reason, do NOT count as systemic
+            # C26/C30: per-molecule failure — skip, log reason, do NOT count as systemic
             reason_str = str(per_err)
-            short_reason = reason_str[:60]
-            skip_reasons[short_reason] = skip_reasons.get(short_reason, 0) + 1
+            # Carry the first 300 chars of the Boltz reason in the log line.
+            short_reason = reason_str[:300]
+            skip_reasons[short_reason[:60]] = skip_reasons.get(short_reason[:60], 0) + 1
             skipped_mol += 1
             per_mol_skip = True
             wlog.info(
@@ -891,6 +917,29 @@ def coordinator_cycle(
             _save_cursor(lease.lease_id, shard_id, row)
 
         if per_mol_skip:
+            # C30: rolling 95%-skip check (per-molecule skips, not systemic failures).
+            # If the vast majority of molecules in the last FAIL_RATE_WINDOW are
+            # unscoreable, the shard is unusable and the lease should be abandoned
+            # rather than burning the full time budget.
+            fail_history.append(False)   # append False (not a systemic failure)
+            if len(fail_history) > FAIL_RATE_WINDOW:
+                fail_history.pop(0)
+            # Compute skip rate over the window using skip_in_window counter.
+            # We reuse fail_history length for the denominator but track skips separately.
+            # Simple approach: if skipped_mol / (skipped_mol + scored) > 0.95 after
+            # at least FAIL_RATE_WINDOW total molecules, abandon.
+            total_attempted = skipped_mol + scored + failed
+            if total_attempted >= FAIL_RATE_WINDOW:
+                skip_rate = skipped_mol / total_attempted
+                if skip_rate > 0.95:
+                    wlog.error(
+                        "[COORD] LEASE_ABANDONED: >95%% of last %d molecules were per-molecule "
+                        "skips (rate=%.2f, scored=%d, skipped=%d, systemic=%d) on lease %s — "
+                        "shard molecules are systematically unscoreable",
+                        total_attempted, skip_rate, scored, skipped_mol, failed,
+                        lease.lease_id[:12],
+                    )
+                    break
             continue
 
         elapsed = time.time() - t0
