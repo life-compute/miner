@@ -58,7 +58,10 @@ sys.path.insert(0, str(_REPO))
 from coordinator.auth import MinerKeypair
 from coordinator.client import CoordinatorClient, Lease, QueuedResult, BACKOFF_BASE_S
 from coordinator.hashes import PinnedHashError
-from coordinator.loop import coordinator_cycle, molecule_hash, MAX_CANDIDATE_CHARS, _clear_cursor, CURSOR_PATH
+from coordinator.loop import (
+    coordinator_cycle, molecule_hash, MAX_CANDIDATE_CHARS, _clear_cursor, CURSOR_PATH,
+    ManifestLookupError, _manifest_lookup,
+)
 
 log = logging.getLogger(__name__)
 
@@ -276,23 +279,28 @@ class TestCoordinatorCycleUnit(unittest.TestCase):
 
         client.enqueue_result.assert_not_called()
 
-    # ── Test 4: alignment mismatch → align_fetch attempted ──────────
+    # ── Test 4: target not in manifest → declined, no enqueue ──────────
 
-    def test_04_alignment_mismatch_triggers_fetch(self):
+    def test_04_target_not_in_manifest_declined(self):
+        """
+        When _manifest_lookup raises ManifestLookupError (target not in manifest),
+        _resolve_protein_inputs returns (None, None) → coordinator_cycle skips the
+        lease and does not call enqueue_result.
+        """
         lease = self._make_lease("protein")
-        lease.pinned_msa_sha256 = "deadbeef" * 8
         client = MagicMock(spec=CoordinatorClient)
         client.get_work.return_value = lease
 
-        with (
-            patch("coordinator.hashes.verify_protein_target",
-                  side_effect=PinnedHashError("hash mismatch")),
-            patch("coordinator.loop._resolve_protein_inputs",
-                  return_value=(None, None)),  # fetch fails → skip
+        with patch(
+            "coordinator.loop._manifest_lookup",
+            side_effect=ManifestLookupError(
+                "DECLINED_TARGET_NOT_IN_MANIFEST: target 'CDK4' is not listed in "
+                "/align/manifest.json — lease declined"
+            ),
         ):
             coordinator_cycle(self.wlog, client, {}, 0)
 
-        # No results posted because MSA could not be resolved
+        # No results posted because target is not in the manifest
         client.enqueue_result.assert_not_called()
 
     # ── Test 5: 5xx on POST → item stays in queue ───────────────────
@@ -487,6 +495,157 @@ class TestCoordinatorCycleUnit(unittest.TestCase):
         self.assertIn(1, seen_rows)
         self.assertIn(2, seen_rows)
 
+
+# ---------------------------------------------------------------------------
+# _manifest_lookup unit tests (no mock server needed — pure manifest dict)
+# ---------------------------------------------------------------------------
+
+class TestManifestLookup(unittest.TestCase):
+    """Unit tests for _manifest_lookup via mock /align/manifest.json server."""
+
+    def _start_manifest_server(self, manifest_dict: dict):
+        import json, threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        payload = json.dumps(manifest_dict).encode()
+
+        class _H(BaseHTTPRequestHandler):
+            def log_message(self, *a, **kw):
+                pass
+            def do_GET(self):
+                if self.path == "/align/manifest.json":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                else:
+                    self.send_response(404); self.end_headers()
+
+        srv = HTTPServer(("127.0.0.1", 0), _H)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+
+    def _manifest(self, entries):
+        return {"files": entries}
+
+    def _entry(self, target, accession, gz_file_name=None, sha="a" * 64):
+        if gz_file_name is None:
+            gz_file_name = f"{accession}.a3m.gz"
+        return {
+            "target": target,
+            "uniprot_accession": accession,
+            "gz_file_name": gz_file_name,
+            "pinned_msa_sha256": sha,
+            "raw_sha256": sha,
+        }
+
+    def test_ml01_target_found_returns_gz_and_sha(self):
+        """_manifest_lookup returns (gz_file_name, pinned_sha) for a known target."""
+        srv, url = self._start_manifest_server(self._manifest([
+            self._entry("CDK4", "P11802"),
+            self._entry("BCL2", "P10415"),
+        ]))
+        try:
+            gz, sha = _manifest_lookup(url, "CDK4")
+            self.assertEqual(gz, "P11802.a3m.gz")
+            self.assertEqual(len(sha), 64)
+        finally:
+            srv.shutdown()
+
+    def test_ml02_target_maps_to_accession_not_name(self):
+        """gz_file_name is accession-based (P11802), not name-based (CDK4)."""
+        srv, url = self._start_manifest_server(self._manifest([
+            self._entry("CDK4", "P11802"),
+        ]))
+        try:
+            gz, _ = _manifest_lookup(url, "CDK4")
+            self.assertNotEqual(gz, "CDK4.a3m.gz",
+                "gz_file_name must be accession-based, not target-name-based")
+            self.assertEqual(gz, "P11802.a3m.gz")
+        finally:
+            srv.shutdown()
+
+    def test_ml03_unknown_target_raises(self):
+        """ManifestLookupError raised when target is not in manifest."""
+        srv, url = self._start_manifest_server(self._manifest([
+            self._entry("BCL2", "P10415"),
+        ]))
+        try:
+            with self.assertRaises(ManifestLookupError) as ctx:
+                _manifest_lookup(url, "UNKNOWNTARGET")
+            self.assertIn("DECLINED_TARGET_NOT_IN_MANIFEST", str(ctx.exception))
+            self.assertIn("UNKNOWNTARGET", str(ctx.exception))
+        finally:
+            srv.shutdown()
+
+    def test_ml04_manifest_fetch_error_raises(self):
+        """ManifestLookupError raised when manifest endpoint returns 404."""
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        import threading
+
+        class _H(BaseHTTPRequestHandler):
+            def log_message(self, *a, **kw): pass
+            def do_GET(self):
+                self.send_response(404); self.end_headers(); self.wfile.write(b"not found")
+
+        srv = HTTPServer(("127.0.0.1", 0), _H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_address[1]}"
+        try:
+            with self.assertRaises(ManifestLookupError):
+                _manifest_lookup(url, "CDK4")
+        finally:
+            srv.shutdown()
+
+    def test_ml05_resolve_protein_inputs_uses_manifest_gz_name(self):
+        """
+        _resolve_protein_inputs must NOT build '<target_name>.a3m.gz';
+        it must call _manifest_lookup and use the returned gz_file_name.
+        """
+        from coordinator.loop import _resolve_protein_inputs
+
+        gz_returned = "P11802.a3m.gz"
+        sha_returned = "b" * 64
+
+        captured = {}
+
+        def _fake_fetch(coordinator_url, target_id, gz_file_name, pinned_raw_sha256, cache_dir):
+            captured["gz_file_name"] = gz_file_name
+            captured["pinned_raw_sha256"] = pinned_raw_sha256
+            # Return a fake cached path
+            import tempfile, pathlib
+            tmp = pathlib.Path(tempfile.mkdtemp()) / "P11802.a3m"
+            tmp.write_text(">seq\nACDEFGHIKLMN\n")
+            return tmp
+
+        lease = _make_lease_dict("protein")
+        from coordinator.client import Lease
+        lobj = Lease(
+            lease_id=lease["lease_id"], target="CDK4", modality="protein",
+            expires_at=lease["expires_at"], shards=[], hit_threshold=-8.0,
+            scorer_profile=lease["scorer_profile"],
+            coord_config_version=lease["coord_config_version"],
+        )
+        wlog = logging.getLogger("test-resolve")
+
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+        with (
+            patch("coordinator.loop._manifest_lookup",
+                  return_value=(gz_returned, sha_returned)),
+            patch("coordinator.align_fetch.fetch_alignment", side_effect=_fake_fetch),
+            patch("miner_daemon._sequence_from_msa", return_value="ACDEFGHIKL"),
+        ):
+            msa_path, seq = _resolve_protein_inputs(lobj, wlog)
+
+        # gz_file_name passed to fetch_alignment must be the accession-based name
+        self.assertEqual(captured.get("gz_file_name"), gz_returned)
+        self.assertNotEqual(captured.get("gz_file_name"), "CDK4.a3m.gz",
+                            "Must NOT use target-name.a3m.gz as the filename")
+        self.assertEqual(captured.get("pinned_raw_sha256"), sha_returned)
 
 # ---------------------------------------------------------------------------
 # End-to-end test (local Worker)

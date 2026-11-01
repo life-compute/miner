@@ -203,6 +203,62 @@ def _to_contract_score(
 
 # ── Protein: MSA helpers ───────────────────────────────────────────────────
 
+class ManifestLookupError(Exception):
+    """Raised when a target is not in the alignment manifest or on fetch failure."""
+
+
+def _manifest_lookup(coordinator_url: str, target_name: str) -> tuple[str, str]:
+    """
+    Fetch GET /align/manifest.json and return (gz_file_name, pinned_raw_sha256)
+    for the requested target.
+
+    The manifest maps target name → UniProt accession → gz_file_name, so this
+    is the correct lookup path (NOT building '<target_name>.a3m.gz' locally).
+
+    Raises ManifestLookupError when:
+      - the manifest cannot be fetched (network / HTTP error)
+      - the target name is not listed in the manifest
+
+    The 'target' field in each manifest entry is the human-readable name
+    (e.g. 'CDK4') that matches the lease's target string.
+    The gz_file_name is the UniProt-accession-based filename (e.g. 'P11802.a3m.gz').
+    The pinned_msa_sha256 field is the raw (decompressed) SHA-256 used to verify
+    the cached .a3m file.
+    """
+    from coordinator.align_fetch import _fetch_manifest, AlignFetchError
+    try:
+        manifest = _fetch_manifest(coordinator_url)
+    except AlignFetchError as exc:
+        raise ManifestLookupError(f"cannot fetch manifest: {exc}") from exc
+
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        raise ManifestLookupError("manifest 'files' key missing or not a list")
+
+    for entry in files:
+        if isinstance(entry, dict) and entry.get("target") == target_name:
+            gz_file_name = entry.get("gz_file_name", "")
+            # Prefer pinned_msa_sha256 (which equals raw_sha256 for all current entries);
+            # fall back to raw_sha256 or decompressed_sha256 for forward-compat.
+            pinned_sha = (
+                entry.get("pinned_msa_sha256")
+                or entry.get("raw_sha256")
+                or entry.get("decompressed_sha256")
+                or ""
+            )
+            if not gz_file_name or not pinned_sha:
+                raise ManifestLookupError(
+                    f"manifest entry for {target_name!r} is missing gz_file_name "
+                    f"or pinned_msa_sha256 — entry={entry}"
+                )
+            return gz_file_name, pinned_sha
+
+    raise ManifestLookupError(
+        f"DECLINED_TARGET_NOT_IN_MANIFEST: target {target_name!r} is not listed in "
+        f"/align/manifest.json — lease declined"
+    )
+
+
 def _resolve_protein_inputs(
     lease: "Lease",
     wlog: logging.Logger,
@@ -211,47 +267,72 @@ def _resolve_protein_inputs(
     Return (msa_path, protein_sequence) for a protein lease.
 
     Strategy:
-      1. Use _msa_path_for / _sequence_from_msa from miner_daemon (lazy import).
-      2. If MSA missing and lease.pinned_msa_sha256 is set, attempt to fetch
-         from coordinator via align_fetch.fetch_alignment.
-      3. Return (None, None) on failure — caller must skip this lease.
+      1. Look up the target name in GET /align/manifest.json to get the correct
+         gz_file_name (UniProt-accession-based, e.g. 'P11802.a3m.gz') and the
+         pinned raw SHA-256.  Decline (return None, None + log) when the target
+         is not in the manifest — this is the authoritative name-to-file mapping.
+      2. Call align_fetch.fetch_alignment() with the manifest-derived gz_file_name
+         and pinned_raw_sha256.  fetch_alignment() checks a local cache first
+         (no download if the file is valid and hash matches).
+      3. Return (None, None) on any failure — caller skips the lease.
+
+    NOTE: the old path (_msa_path_for from miner_daemon) relied on a local
+    ticker table (e.g. "CDK4" → some local path) and built the gz filename as
+    "<target_name>.a3m.gz" — which is wrong because the coordinator stores files
+    by UniProt accession ("P11802.a3m.gz"), not by target name.  The manifest is
+    the single source of truth for this mapping.
     """
     target_id = lease.target
+    coordinator_url = os.environ.get("COORDINATOR_URL", "http://localhost:8787")
+
+    # ── Step 1: Manifest lookup — decline if target not listed ────────────
     try:
-        import sys
-        sys.path.insert(0, str(_WORK_DIR))
-        from miner_daemon import _msa_path_for, _sequence_from_msa
-    except Exception as exc:
-        wlog.warning("[COORD] cannot import miner_daemon helpers: %s", exc)
+        gz_file_name, pinned_raw_sha256 = _manifest_lookup(coordinator_url, target_id)
+    except ManifestLookupError as exc:
+        wlog.warning(
+            "[COORD] %s — skipping lease %s",
+            exc, lease.lease_id[:12],
+        )
         return None, None
 
-    msa_raw = _msa_path_for(target_id, gene_name=target_id, download=True)
-    msa_path = Path(msa_raw) if msa_raw and msa_raw != "empty" else None
+    wlog.info(
+        "[COORD] manifest resolved %s → %s (sha256=%s…)",
+        target_id, gz_file_name, pinned_raw_sha256[:16],
+    )
 
-    # If no local MSA but coordinator has a pinned hash → try fetch_alignment
-    if msa_path is None and lease.pinned_msa_sha256:
-        try:
-            from coordinator.align_fetch import fetch_alignment, AlignFetchError
-            coordinator_url = os.environ.get("COORDINATOR_URL", "http://localhost:8787")
-            dest_dir = _WORK_DIR / "data" / "msa_files"
-            gz_name = f"{target_id}.a3m.gz"
-            fetched_path = fetch_alignment(
-                coordinator_url=coordinator_url,
-                target_id=target_id,
-                gz_file_name=gz_name,
-                pinned_raw_sha256=lease.pinned_msa_sha256,
-                cache_dir=dest_dir,
-            )
-            msa_path = fetched_path if fetched_path else None
-            wlog.info("[COORD] align_fetch wrote %s", msa_path)
-        except Exception as exc:
-            wlog.warning("[COORD] align_fetch failed for %s: %s", target_id, exc)
+    # ── Step 2: Fetch (or verify cache) via align_fetch ───────────────────
+    dest_dir = _WORK_DIR / "data" / "align_cache"
+    try:
+        from coordinator.align_fetch import fetch_alignment, AlignFetchError
+        msa_path: Optional[Path] = fetch_alignment(
+            coordinator_url=coordinator_url,
+            target_id=target_id,
+            gz_file_name=gz_file_name,
+            pinned_raw_sha256=pinned_raw_sha256,
+            cache_dir=dest_dir,
+        )
+        wlog.info("[COORD] align_fetch wrote/verified %s", msa_path)
+    except Exception as exc:
+        wlog.warning(
+            "[COORD] align_fetch failed for %s (%s): %s",
+            target_id, gz_file_name, exc,
+        )
+        return None, None
 
     if msa_path is None or not msa_path.exists():
         wlog.warning("[COORD] no MSA for %s — skipping lease", target_id)
         return None, None
 
-    seq = _sequence_from_msa(str(msa_path))
+    # ── Step 3: Read protein sequence from the decompressed .a3m ─────────
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(_WORK_DIR))
+        from miner_daemon import _sequence_from_msa
+        seq = _sequence_from_msa(str(msa_path))
+    except Exception as exc:
+        wlog.warning("[COORD] _sequence_from_msa failed for %s: %s", msa_path, exc)
+        return None, None
+
     if not seq:
         wlog.warning("[COORD] empty sequence from MSA %s — skipping lease", msa_path)
         return None, None
@@ -385,37 +466,19 @@ def coordinator_cycle(
         _clear_cursor()
         return
 
-    # ── 4. Protein: hash verification + MSA ────────────────────────────
+    # ── 4. Protein: resolve alignment through manifest + align_fetch ────
     msa_path:         Optional[Path] = None
     protein_sequence: Optional[str]  = None
 
     if lease.modality == "protein":
-        # Verify pinned hashes (raises PinnedHashError on mismatch)
-        try:
-            from coordinator.hashes import verify_protein_target, PinnedHashError  # noqa: F401
-            import sys as _sys; _sys.path.insert(0, str(_WORK_DIR))
-            from miner_daemon import _msa_path_for as _msa_for
-            msa_raw = _msa_for(lease.target, gene_name=lease.target)
-            receptor_path = None   # receptor PDB not yet in local cache by default
-            msa_file = Path(msa_raw) if msa_raw and msa_raw != "empty" else None
-            verify_protein_target(
-                target_id=lease.target,
-                receptor_path=receptor_path,
-                msa_path=msa_file,
-                pinned_receptor_sha256=lease.pinned_receptor_sha256,
-                pinned_msa_sha256=lease.pinned_msa_sha256,
-            )
-        except Exception as exc:
-            from coordinator.hashes import PinnedHashError
-            if isinstance(exc, PinnedHashError):
-                wlog.warning("[COORD] pinned-hash mismatch — trying align_fetch: %s", exc)
-                # Fall through; _resolve_protein_inputs will re-fetch
-            else:
-                wlog.debug("[COORD] hash check skipped (%s)", exc)
-
+        # _resolve_protein_inputs fetches /align/manifest.json to map the
+        # target name to the correct gz_file_name (UniProt-accession-based),
+        # then calls align_fetch.fetch_alignment() to verify/download the .a3m.
+        # It declines (returns None, None) with a log line if the target is
+        # not in the manifest.
         msa_path, protein_sequence = _resolve_protein_inputs(lease, wlog)
         if msa_path is None:
-            # MSA unavailable; cannot score protein target
+            # MSA unavailable or target not in manifest; cannot score protein target
             return
 
     # ── 5. Cursor (restart-resume) ────────────────────────────────────
