@@ -85,6 +85,70 @@ BOLTZ_JSONL = _WORK_DIR / "output" / "life_boltz_scores.jsonl"
 # sends a candidate the coordinator rejects AND stays within our own budget.
 MAX_CANDIDATE_CHARS = 2048
 
+# ── Back-off state (C24) ───────────────────────────────────────────────────
+# When every molecule in a lease fails due to shard/alignment errors the miner
+# must not ask for another lease immediately (each failed lease locks 4 shards
+# for 4 hours).  Exponential back-off: first wait BACKOFF_BASE_S, doubling each
+# consecutive failure up to BACKOFF_MAX_S.  Reset to zero on any scored result.
+BACKOFF_BASE_S:  float = float(os.environ.get("COORD_BACKOFF_BASE_S",  "60"))
+BACKOFF_MAX_S:   float = float(os.environ.get("COORD_BACKOFF_MAX_S",   "600"))
+BACKOFF_MAX_CONSECUTIVE: int = int(os.environ.get("COORD_BACKOFF_MAX_FAILS", "10"))
+
+# Module-level back-off state — shared across all calls in the same process.
+# Reset with _reset_backoff() in tests.
+_backoff_state: dict = {
+    "consecutive_failures": 0,
+    "next_allowed_at": 0.0,   # epoch seconds
+}
+
+
+def _reset_backoff() -> None:
+    """Reset back-off state (used in tests and on process start)."""
+    _backoff_state["consecutive_failures"] = 0
+    _backoff_state["next_allowed_at"] = 0.0
+
+
+def _record_failure(wlog: logging.Logger) -> None:
+    """
+    Record one consecutive shard/alignment failure and schedule a back-off sleep.
+    Logs a single clear error line each time.
+    """
+    n = _backoff_state["consecutive_failures"] + 1
+    _backoff_state["consecutive_failures"] = n
+    wait = min(BACKOFF_BASE_S * (2 ** (n - 1)), BACKOFF_MAX_S)
+    _backoff_state["next_allowed_at"] = time.time() + wait
+    wlog.error(
+        "[COORD] SHARD_FAIL: 0 molecules scored (consecutive=%d, back-off=%.0fs)",
+        n, wait,
+    )
+
+
+def _record_success() -> None:
+    """Reset back-off after any lease that produced at least one scored molecule."""
+    _backoff_state["consecutive_failures"] = 0
+    _backoff_state["next_allowed_at"] = 0.0
+
+
+def _backoff_exceeded(wlog: logging.Logger) -> bool:
+    """Return True and log when the max consecutive-failure limit is reached."""
+    if _backoff_state["consecutive_failures"] >= BACKOFF_MAX_CONSECUTIVE:
+        wlog.error(
+            "[COORD] SHARD_FAIL: %d consecutive failures — stopping lease requests "
+            "(COORD_BACKOFF_MAX_FAILS=%d). Fix shards or alignment before restarting.",
+            _backoff_state["consecutive_failures"], BACKOFF_MAX_CONSECUTIVE,
+        )
+        return True
+    return False
+
+
+def _wait_for_backoff(wlog: logging.Logger) -> None:
+    """Block until the back-off window has elapsed (if any)."""
+    remaining = _backoff_state["next_allowed_at"] - time.time()
+    if remaining > 0:
+        wlog.info("[COORD] back-off: waiting %.0fs before next lease request", remaining)
+        time.sleep(remaining)
+
+
 # ── Client cache (one per gpu_idx) ────────────────────────────────────────
 _CLIENT_CACHE: dict[int, "CoordinatorClient"] = {}
 
@@ -419,13 +483,23 @@ def coordinator_cycle(
     """
     One coordinator work cycle.  Called from gpu_worker() when COORDINATOR_MODE=True.
 
+    - Checks back-off: if previous leases all scored 0 due to shard/alignment
+      errors, waits for the back-off window and stops after BACKOFF_MAX_CONSECUTIVE
+      consecutive failures.
     - Fetches a lease (GET /work).
     - Declines CRISPR leases cleanly.
     - Iterates shard molecules with a persisted cursor (restart-resume).
     - Scores each molecule using the locked scorer profile.
     - Enqueues results to the durable JSONL queue (retry + backoff in background).
+    - Records success (scored > 0) or failure (scored == 0 due to shard errors)
+      to drive exponential back-off on the next call.
     - Returns after exhausting the lease shards (or on error).
     """
+    # ── 0. Back-off guard (C24) ─────────────────────────────────────────
+    if _backoff_exceeded(wlog):
+        return
+    _wait_for_backoff(wlog)
+
     # ── 1. Lease ────────────────────────────────────────────────────────
     wlog.info("[COORD] GET /work …")
     try:
@@ -616,3 +690,13 @@ def coordinator_cycle(
         lease.lease_id[:12], scored, lease.target,
     )
     _clear_cursor()
+
+    # ── Back-off accounting (C24) ─────────────────────────────────────
+    if scored > 0:
+        _record_success()
+    else:
+        # scored == 0: all shards failed (format error, download fail, alignment
+        # error, or empty shards).  Record as a failure and schedule back-off
+        # so we don't hammer the coordinator with immediate re-requests that each
+        # lock 4 more shards for 4 hours.
+        _record_failure(wlog)

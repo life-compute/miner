@@ -1,18 +1,24 @@
 """
-Shard manager: download lease shards, verify SHA-256, LRU disk cache (C3).
+Shard manager: download lease shards, verify SHA-256, LRU disk cache (C3/C24).
 
-- Each shard archive is stored under data/shards/<sha256>.tar.gz.
-- SHA-256 of the downloaded file is verified against the lease field sha256.
-- LRU eviction: when disk exceeds CACHE_MAX_BYTES, remove oldest accessed shards.
-- Falls back gracefully if coordinator or shard CDN is unreachable.
-- Shard row index is preserved in molecule records for result submission.
-- Never uses /tmp — all files written under the miner's data folder.
+C24 fix — shard format is plain .smi.gz (gzip-compressed SMILES text, NOT tar):
+- Each shard archive stored under data/shards/<sha256>.smi.gz
+- SHA-256 verified against the lease sha256 field
+- file_name from the lease shard entry carries the correct extension
+  (e.g. savi_novel_0001.smi.gz); miner uses it to cache with correct suffix
+- _molecules_from_smi_gz: gzip.decompress → split lines → yield SMILES
+- Backward compat: if the URL ends in .tar.gz the old tarfile path is kept
+  (guarded by _is_tar_url to handle any future format change)
+- LRU eviction unchanged
+- Falls back gracefully if coordinator or shard CDN is unreachable
+- Shard row index is preserved in molecule records for result submission
+- Never uses /tmp — all files written under the miner's data folder
 """
 
 from __future__ import annotations
 
+import gzip
 import hashlib
-import io
 import json
 import logging
 import os
@@ -45,13 +51,18 @@ def _sha256_file(path: Path) -> str:
 
 
 def _cache_used_bytes() -> int:
-    return sum(f.stat().st_size for f in SHARD_DIR.glob("*.tar.gz") if f.is_file())
+    return sum(
+        f.stat().st_size
+        for f in SHARD_DIR.iterdir()
+        if f.is_file() and (f.suffix == ".gz")
+    )
 
 
 def _evict_lru(needed_bytes: int) -> None:
-    """Remove oldest-accessed shard archives until needed_bytes are free."""
+    """Remove oldest-accessed shard files until needed_bytes are free."""
     files = sorted(
-        [(f.stat().st_atime, f) for f in SHARD_DIR.glob("*.tar.gz") if f.is_file()]
+        [(f.stat().st_atime, f) for f in SHARD_DIR.iterdir()
+         if f.is_file() and f.suffix == ".gz"]
     )
     used = _cache_used_bytes()
     target = CACHE_MAX_BYTES - needed_bytes
@@ -64,13 +75,36 @@ def _evict_lru(needed_bytes: int) -> None:
         used -= sz
 
 
+def _is_tar_url(url: str) -> bool:
+    """True when the URL ends with .tar.gz — legacy format check."""
+    return url.lower().endswith(".tar.gz")
+
+
+def _cache_path(expected_sha256: str, url: str) -> Path:
+    """
+    Derive the local cache path for a shard.
+
+    C24: shards are plain .smi.gz (not .tar.gz). We derive the extension from
+    the URL so that the cache filename reflects the actual file format.
+    Cached files are named <sha256><ext> — e.g. <sha256>.smi.gz.
+    """
+    if _is_tar_url(url):
+        ext = ".tar.gz"
+    else:
+        ext = ".smi.gz"
+    return SHARD_DIR / f"{expected_sha256}{ext}"
+
+
 def _download_shard(url: str, expected_sha256: str) -> Optional[Path]:
     """
-    Download a shard archive to the cache.
+    Download a shard to the cache.
     Returns the local Path on success, None on failure.
     Verifies SHA-256 before storing; retries once on mismatch.
+
+    C24: saves with correct extension derived from the URL
+    (plain .smi.gz, not .tar.gz).
     """
-    dest = SHARD_DIR / f"{expected_sha256}.tar.gz"
+    dest = _cache_path(expected_sha256, url)
     if dest.exists():
         actual = _sha256_file(dest)
         if actual == expected_sha256:
@@ -79,6 +113,13 @@ def _download_shard(url: str, expected_sha256: str) -> Optional[Path]:
             return dest
         log.warning("[SHARD] cache file corrupt — re-downloading %s", expected_sha256[:16])
         dest.unlink(missing_ok=True)
+
+    # Remove any stale file with the wrong extension for the same hash
+    for ext in (".tar.gz", ".smi.gz"):
+        stale = SHARD_DIR / f"{expected_sha256}{ext}"
+        if stale != dest and stale.exists():
+            stale.unlink(missing_ok=True)
+            log.info("[SHARD] removed stale file with wrong extension %s", stale.name)
 
     log.info("[SHARD] downloading shard %s …", expected_sha256[:16])
     try:
@@ -109,9 +150,38 @@ def _download_shard(url: str, expected_sha256: str) -> Optional[Path]:
     return dest
 
 
-def _molecules_from_archive(path: Path) -> Iterator[tuple[str, int]]:
+def _molecules_from_smi_gz(path: Path) -> Iterator[tuple[str, int]]:
     """
-    Yield (smiles, row_index) from a shard tar.gz archive.
+    Yield (smiles, row_index) from a plain gzip-compressed SMILES file.
+
+    C24: coordinator shards are .smi.gz — plain gzip over a text file where
+    each line is a SMILES string (optionally followed by a name/id after a
+    space, matching the standard .smi format).  There is NO tar layer.
+
+    Format: one SMILES per line, whitespace-separated (first token = SMILES).
+    Lines starting with '#' or blank lines are skipped.
+    """
+    try:
+        with gzip.open(path, "rb") as fh:
+            content = fh.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        log.error("[SHARD] failed to read archive %s: %s", path, e)
+        return
+
+    row = 0
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        smiles = line.split()[0]
+        if smiles:
+            yield smiles, row
+        row += 1
+
+
+def _molecules_from_tar_gz(path: Path) -> Iterator[tuple[str, int]]:
+    """
+    Yield (smiles, row_index) from a shard tar.gz archive (legacy format).
 
     Expected archive layout:
       molecules.smi   — one SMILES per line (plain text)
@@ -123,7 +193,6 @@ def _molecules_from_archive(path: Path) -> Iterator[tuple[str, int]]:
     try:
         with tarfile.open(path, "r:gz") as tf:
             names = tf.getnames()
-            # prefer molecules.smi
             target_name = None
             for candidate in ["molecules.smi", "molecules.smiles", "molecules.jsonl"]:
                 if candidate in names:
@@ -155,7 +224,6 @@ def _molecules_from_archive(path: Path) -> Iterator[tuple[str, int]]:
                 except Exception:
                     smiles = ""
             else:
-                # .smi: "SMILES [name]"
                 smiles = line.split()[0]
             if smiles:
                 yield smiles, row
@@ -164,15 +232,33 @@ def _molecules_from_archive(path: Path) -> Iterator[tuple[str, int]]:
         log.error("[SHARD] failed to read archive %s: %s", path, e)
 
 
+def _molecules_from_archive(path: Path) -> Iterator[tuple[str, int]]:
+    """
+    Dispatch to the correct reader based on the cached file's extension.
+
+    C24: .smi.gz → plain gzip text; .tar.gz → tar+gzip (legacy).
+    """
+    name = path.name
+    if name.endswith(".tar.gz"):
+        yield from _molecules_from_tar_gz(path)
+    else:
+        # .smi.gz — plain gzip (C24 standard format)
+        yield from _molecules_from_smi_gz(path)
+
+
 class ShardManager:
     """
-    Download and iterate molecules from coordinator lease shards.
+    Download and iterate molecules from coordinator lease shards (C24).
 
     Usage:
         sm = ShardManager()
         for smiles, shard_id, row in sm.iter_molecules(lease.shards):
             ...
     Falls back to an empty iterator if all shards fail to download.
+
+    C24: shard entries must carry download_url and sha256.  The file_name
+    field (added to GET /work in C24) is informational only — the cache path
+    is derived from the URL extension.
     """
 
     def __init__(self, shard_dir: Path = SHARD_DIR):
@@ -185,7 +271,7 @@ class ShardManager:
         """
         Yield (smiles, shard_id, row_index) from all shards in the lease.
 
-        shard entry keys: shard_id, download_url, sha256, mol_count
+        shard entry keys: shard_id, download_url, sha256, mol_count[, file_name]
         """
         for shard in shards:
             shard_id    = shard.get("shard_id", 0)
