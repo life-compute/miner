@@ -62,6 +62,9 @@ import json
 import logging
 import math
 import os
+import subprocess
+import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
@@ -78,6 +81,98 @@ log = logging.getLogger(__name__)
 _WORK_DIR   = Path(__file__).resolve().parents[1]
 CURSOR_PATH = _WORK_DIR / "data" / "coordinator_cursor.json"
 BOLTZ_JSONL = _WORK_DIR / "output" / "life_boltz_scores.jsonl"
+
+# ── Boltz interpreter (Fix C25) ────────────────────────────────────────────
+# PM2 runs this file with `interpreter: python3` (= /usr/bin/python3) which does
+# not have boltz installed.  Boltz 2.2.1 lives in the nova_subnet venv.
+# All Boltz calls are dispatched as subprocesses under NOVA_VENV — same pattern
+# used by miner_daemon.run_boltz2_scoring — so the PM2 interpreter never needs
+# to import boltz directly.
+NOVA_DIR: Path  = Path("/mnt/minos-drive/nova_subnet")
+NOVA_VENV: Path = NOVA_DIR / ".venv" / "bin" / "python3"
+
+# Consecutive-scorer-failure threshold before the lease is abandoned (Fix C25).
+# Only scorer failures (None / non-finite result) count; candidate-too-long and
+# cursor-skip do not count.  Reset to 0 on the first successful score.
+MAX_SCORER_FAILURES: int = int(os.environ.get("COORD_MAX_SCORER_FAILURES", "5"))
+
+# ── Boltz subprocess helper template ──────────────────────────────────────
+# Runs inside NOVA_VENV which has boltz 2.2.1 + nova_pulse_scorer available.
+# Accepts a JSON blob on argv[1]; prints one JSON line to stdout on success.
+#
+# CRITICAL: we import from nova_adaptive.nova_pulse_scorer (the original, under
+# nova_subnet/) NOT from adaptive.vendor.nova_pulse_scorer (the life-compute-miner
+# vendored copy).  The vendored copy sets BOLTZ_TMP relative to its own location
+# (life-compute-miner/adaptive/external_tools/…) which differs from where boltz
+# actually writes its output (nova_subnet/external_tools/…).  Using the original
+# avoids the pre_affinity_*.npz "No such file" FileNotFoundError.
+_BOLTZ_HELPER = """\
+import sys, json
+sys.path.insert(0, "{nova_dir}")
+
+# Apply scorer-profile settings to nova_pulse_scorer module-level constants.
+from nova_adaptive import nova_pulse_scorer as _nps
+
+args           = json.loads(sys.argv[1])
+smiles         = args["smiles"]
+target         = args["target"]
+protein_seq    = args["protein_sequence"]
+msa_path       = args["msa_path"]
+profile        = args.get("scorer_profile", {{}})
+flags          = profile.get("flags", {{}})
+msa_dict       = profile.get("msa_sampling", {{}})
+seed_val       = profile.get("seed")
+
+# Patch FAST_* constants from profile
+_nps.FAST_RECYCLING_STEPS       = flags.get("recycling_steps",   _nps.FAST_RECYCLING_STEPS)
+_nps.FAST_SAMPLING_STEPS        = flags.get("sampling_steps",    _nps.FAST_SAMPLING_STEPS)
+_nps.FAST_DIFFUSION_SAMPLES     = flags.get("diffusion_samples", _nps.FAST_DIFFUSION_SAMPLES)
+_nps.FAST_SAMPLING_STEPS_AFF    = flags.get("sampling_steps_affinity",    _nps.FAST_SAMPLING_STEPS)
+_nps.FAST_DIFFUSION_SAMPLES_AFF = flags.get("diffusion_samples_affinity", _nps.FAST_DIFFUSION_SAMPLES)
+
+detailed = _nps._score_batch_impl([smiles], target, protein_seq, msa_path)
+d   = detailed.get(smiles) or {{}}
+raw = d.get("affinity_pred_value")
+print(json.dumps({{"raw": raw, "smiles": smiles}}))
+"""
+
+
+def startup_boltz_check() -> None:
+    """
+    Fail fast if Boltz 2.2.1 or the GPU is unavailable.
+
+    Called once before any lease is taken.  Raises RuntimeError with a single
+    clear error line if the check fails — the caller (gpu_worker / main) must
+    exit rather than take a lease that will fail every molecule.
+    """
+    if not NOVA_VENV.exists():
+        raise RuntimeError(
+            f"[COORD] STARTUP_CHECK FAILED: nova venv missing at {NOVA_VENV}  "
+            "— cannot score molecules without Boltz 2.2.1"
+        )
+    check_src = (
+        "import sys\n"
+        f"sys.path.insert(0, '{NOVA_DIR}')\n"
+        "import boltz; import torch\n"
+        "gpu_ok = torch.cuda.is_available()\n"
+        "print('BOLTZ_OK', boltz.__version__, 'GPU', gpu_ok)\n"
+        "sys.exit(0 if gpu_ok else 1)\n"
+    )
+    try:
+        r = subprocess.run(
+            [str(NOVA_VENV), "-c", check_src],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"[COORD] STARTUP_CHECK FAILED: could not exec nova venv: {exc}"
+        ) from exc
+    if r.returncode != 0:
+        details = (r.stdout + r.stderr)[-300:]
+        raise RuntimeError(
+            f"[COORD] STARTUP_CHECK FAILED: Boltz or GPU unavailable — {details}"
+        )
+    log.info("[COORD] startup_boltz_check: %s", r.stdout.strip())
 
 # Candidate length limit — must match MAX_CANDIDATE_BYTES in client.py and
 # the Worker's results.ts MAX_CANDIDATE_BYTES (both currently 4 096).
@@ -417,23 +512,54 @@ def _score_protein(
     """
     Score one protein-mode molecule.
 
-    Uses score_batch_with_profile (C3b) which applies the locked profile
-    flags to the Boltz2 subprocess invocation.  Returns raw affinity_pred_value
-    (log10 IC50/µM); caller converts to kcal/mol.
+    Dispatches to NOVA_VENV (boltz 2.2.1) via a subprocess so this module
+    never tries to import boltz under PM2's /usr/bin/python3.  Uses the
+    same pattern as miner_daemon.run_boltz2_scoring.
+
+    Returns raw affinity_pred_value (log10 IC50/µM); caller converts to kcal/mol.
     """
+    helper_src = _BOLTZ_HELPER.format(nova_dir=str(NOVA_DIR))
+    args_json  = json.dumps({
+        "smiles":           smiles,
+        "target":           target_id,
+        "protein_sequence": protein_sequence,
+        "msa_path":         str(msa_path),
+        "scorer_profile":   scorer_profile,
+    })
     try:
-        from adaptive.vendor.boltz_scorer import score_batch_with_profile
-        result = score_batch_with_profile(
-            smiles_list=[smiles],
-            target=target_id,
-            protein_sequence=protein_sequence,
-            msa_path=str(msa_path),
-            scorer_profile=scorer_profile,
-        )
-        return result.get(smiles)   # float or None
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False,
+                                         prefix="coord-boltz-") as f:
+            f.write(helper_src)
+            helper_path = f.name
+        try:
+            r = subprocess.run(
+                [str(NOVA_VENV), helper_path, args_json],
+                capture_output=True, text=True, timeout=300,
+                cwd=str(NOVA_DIR),
+            )
+        finally:
+            try:
+                os.unlink(helper_path)
+            except Exception:
+                pass
     except Exception as exc:
-        wlog.warning("[COORD] protein scoring failed for %s: %s", smiles[:40], exc)
+        wlog.warning("[COORD] protein scoring subprocess error %s: %s", smiles[:40], exc)
         return None
+
+    if r.returncode != 0:
+        wlog.warning("[COORD] protein scoring failed %s (rc=%d): %s",
+                     smiles[:40], r.returncode, r.stderr[-300:])
+        return None
+
+    for line in reversed(r.stdout.strip().splitlines()):
+        try:
+            parsed = json.loads(line)
+            return parsed.get("raw")   # float or None
+        except Exception:
+            continue
+
+    wlog.warning("[COORD] protein scoring: no parseable output for %s", smiles[:40])
+    return None
 
 
 def _score_mrna(
@@ -572,9 +698,11 @@ def coordinator_cycle(
     )
 
     # ── 6. Shard iteration ───────────────────────────────────────────
-    sm      = ShardManager()
-    scored  = 0
-    skipped = 0
+    sm             = ShardManager()
+    scored         = 0     # molecules with a finite contract_score that were enqueued
+    failed         = 0     # molecules where scoring returned None or non-finite
+    skipped        = 0     # cursor-resume skips
+    consec_fail    = 0     # consecutive scorer failures (reset on any success)
 
     for smiles, shard_id, row in sm.iter_molecules(lease.shards):
         # Lease-expiry mid-run check
@@ -590,7 +718,7 @@ def coordinator_cycle(
             skipped += 1
             continue
 
-        # Candidate length limit
+        # Candidate length limit — advance cursor but do NOT count as scored/failed
         if len(smiles) > MAX_CANDIDATE_CHARS:
             wlog.warning(
                 "[COORD] candidate too long (%d chars > %d) — dropping mol shard=%s row=%d",
@@ -616,12 +744,48 @@ def coordinator_cycle(
 
         # Convert to contract score
         contract_score = _to_contract_score(raw_score, lease.modality)
-        mol_hash       = molecule_hash(smiles)
-        hit_threshold  = lease.hit_threshold
+
+        # ── NaN / non-finite guard (Fix C25) ─────────────────────────
+        # A None or non-finite contract_score must never be enqueued,
+        # posted, or counted as scored.  The cursor must NOT advance past
+        # this molecule until a finite score is produced.
+        if contract_score is None or not math.isfinite(contract_score):
+            failed      += 1
+            consec_fail += 1
+            wlog.warning(
+                "[COORD] SCORE_FAIL shard=%s row=%d  mol=%s…  raw=%s  contract=%s  %.1fs"
+                "  (consec=%d/%d)",
+                shard_id, row, smiles[:40],
+                raw_score, contract_score,
+                elapsed, consec_fail, MAX_SCORER_FAILURES,
+            )
+            _write_jsonl({
+                "ts": time.time(), "source": "coordinator",
+                "lease_id": lease.lease_id, "target_id": lease.target,
+                "modality": lease.modality, "shard_id": shard_id, "shard_row": row,
+                "smiles": smiles, "raw_score": raw_score, "score": None,
+                "molecule_hash": molecule_hash(smiles), "hit": False,
+                "elapsed": round(elapsed, 2), "gpu": gpu_idx,
+            })
+            if consec_fail >= MAX_SCORER_FAILURES:
+                wlog.error(
+                    "[COORD] LEASE_ABANDONED: %d consecutive scorer failures on lease %s"
+                    " — abandoning (consec_fail=%d >= MAX_SCORER_FAILURES=%d)",
+                    consec_fail, lease.lease_id[:12],
+                    consec_fail, MAX_SCORER_FAILURES,
+                )
+                break
+            # Do NOT save cursor — do not advance past a molecule that failed scoring
+            continue
+
+        # Score is finite: reset consecutive-failure counter
+        consec_fail = 0
+
+        mol_hash      = molecule_hash(smiles)
+        hit_threshold = lease.hit_threshold
 
         hit = (
-            contract_score is not None
-            and hit_threshold is not None
+            hit_threshold is not None
             and contract_score <= hit_threshold
             and contract_score < 0
         )
@@ -630,28 +794,27 @@ def coordinator_cycle(
             "[COORD] shard=%s row=%d  mol=%s…  raw=%.4f  score=%.4f  %s  %.1fs",
             shard_id, row, smiles[:40],
             raw_score if raw_score is not None else float("nan"),
-            contract_score if contract_score is not None else float("nan"),
+            contract_score,
             "✔ HIT" if hit else "✘",
             elapsed,
         )
 
         # ── 8. Enqueue ───────────────────────────────────────────────
-        if contract_score is not None:
-            try:
-                from miner_daemon import _detect_gpu_model
-                gpu_model: Optional[str] = _detect_gpu_model(gpu_idx)[:128]
-            except Exception:
-                gpu_model = None
+        try:
+            from miner_daemon import _detect_gpu_model
+            gpu_model: Optional[str] = _detect_gpu_model(gpu_idx)[:128]
+        except Exception:
+            gpu_model = None
 
-            client.enqueue_result(
-                lease_id=lease.lease_id,
-                molecule_hash=mol_hash,
-                score=contract_score,
-                candidate=smiles,
-                shard_id=shard_id,
-                shard_row=row,
-                miner_gpu_model=gpu_model,
-            )
+        client.enqueue_result(
+            lease_id=lease.lease_id,
+            molecule_hash=mol_hash,
+            score=contract_score,
+            candidate=smiles,
+            shard_id=shard_id,
+            shard_row=row,
+            miner_gpu_model=gpu_model,
+        )
 
         # ── 9. Audit JSONL ───────────────────────────────────────────
         _write_jsonl({
@@ -679,15 +842,15 @@ def coordinator_cycle(
         except Exception:
             pass
 
-        # Persist cursor after each molecule
+        # Persist cursor only after a successful score
         _save_cursor(lease.lease_id, shard_id, row)
         scored += 1
 
     if skipped:
         wlog.info("[COORD] skipped %d already-processed molecules (cursor resume)", skipped)
     wlog.info(
-        "[COORD] lease %s done — scored=%d  target=%s",
-        lease.lease_id[:12], scored, lease.target,
+        "[COORD] lease %s done — scored=%d  failed=%d  skipped=%d  target=%s",
+        lease.lease_id[:12], scored, failed, skipped, lease.target,
     )
     _clear_cursor()
 

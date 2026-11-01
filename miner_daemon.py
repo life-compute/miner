@@ -2397,7 +2397,12 @@ def main():
             f"[COORD-DIAG] pid={os.getpid()} COORDINATOR_MODE={COORDINATOR_MODE!r} "
             f"(env='{os.environ.get('COORDINATOR_MODE', '')}') taking coordinator branch (main/single-GPU)"
         )
-        from coordinator.loop import _get_or_create_client, coordinator_cycle
+        from coordinator.loop import _get_or_create_client, coordinator_cycle, startup_boltz_check
+        try:
+            startup_boltz_check()
+        except RuntimeError as _check_err:
+            log.error("%s — exiting before any lease is taken", _check_err)
+            return
         _coord_client_main = _get_or_create_client(0)
         shared_stats_main: dict = {}
         while True:
