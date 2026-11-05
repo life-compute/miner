@@ -65,6 +65,8 @@ class QueuedResult:
     shard_id: Optional[int] = None
     shard_row: Optional[int] = None
     miner_gpu_model: Optional[str] = None
+    # C47: target from the lease — included in result body for v2 audit trail
+    target: Optional[str] = None
     # internal tracking
     attempts: int = 0
     first_queued_ts: float = field(default_factory=time.time)
@@ -241,6 +243,7 @@ class CoordinatorClient:
         shard_row: Optional[int] = None,
         miner_gpu_model: Optional[str] = None,
         expires_at: int = 0,
+        target: Optional[str] = None,
     ) -> None:
         """
         Persist a scored result to the durable queue and kick the drain loop.
@@ -253,6 +256,9 @@ class CoordinatorClient:
         expires_at (C28): Unix milliseconds when the lease expires.  If set,
         the drain loop drops the item at start-up when the expiry has passed.
         Pass 0 (default) when unknown.
+
+        target (C47): The lease target string.  Included in result body for
+        v2 audit trail.  Optional; omitted from body when None.
         """
         if len(candidate) > MAX_CANDIDATE_BYTES:
             log.error(
@@ -271,6 +277,7 @@ class CoordinatorClient:
             shard_row=shard_row,
             miner_gpu_model=miner_gpu_model,
             expires_at=expires_at,
+            target=target,
         )
         self._append_queue(item)
         self._ensure_drain_running()
@@ -374,6 +381,9 @@ class CoordinatorClient:
             "score": item.score,
             "candidate": item.candidate,
         }
+        # C47: include target from lease for v2 audit trail
+        if item.target is not None:
+            body_dict["target"] = item.target
         if item.miner_gpu_model is not None:
             body_dict["miner_gpu_model"] = item.miner_gpu_model
         if item.shard_id is not None:
