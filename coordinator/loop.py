@@ -1032,6 +1032,7 @@ def coordinator_cycle(
             shard_row=row,
             miner_gpu_model=gpu_model,
             expires_at=lease.expires_at,  # C28: used for startup stale-drop
+            target=lease.target,          # C47b: required by Worker log-v2 audit trail
         )
 
         # ── 9. Audit JSONL ───────────────────────────────────────────
