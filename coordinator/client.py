@@ -29,6 +29,19 @@ from .ua import MINER_UA
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# C48: Custom exceptions
+# ---------------------------------------------------------------------------
+
+class NoFeasibleTargetError(Exception):
+    """Raised by get_work() when the Worker responds with no_feasible_target.
+
+    Carry the Retry-After value so coordinator_cycle can apply the right sleep.
+    """
+    def __init__(self, retry_after: int = 300):
+        super().__init__(f"no_feasible_target (retry after {retry_after}s)")
+        self.retry_after: int = int(retry_after)
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -165,6 +178,9 @@ class CoordinatorClient:
         fallback_url: Optional[str] = COORD_FALLBACK_URL,
         worker_name: Optional[str] = None,
         queue_path: Path = QUEUE_PATH,
+        gpu_memory_mb: int = 0,
+        gpu_model: Optional[str] = None,
+        miner_version: Optional[str] = None,
     ):
         if not validate_worker_name(worker_name):
             raise ValueError(
@@ -174,6 +190,9 @@ class CoordinatorClient:
         self.coordinator_url = coordinator_url.rstrip("/")
         self.fallback_url = fallback_url.rstrip("/") if fallback_url else None
         self.worker_name = worker_name
+        self.gpu_memory_mb = gpu_memory_mb
+        self.gpu_model = gpu_model
+        self.miner_version = miner_version
         self.queue_path: Path = Path(queue_path)
         self.queue_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -200,18 +219,41 @@ class CoordinatorClient:
         """
         Fetch a lease from the coordinator (or fallback).
         Returns a Lease on success, None on failure.
+
+        C48: passes X-GPU-Memory-MB, X-GPU-Model, X-Miner-Version capability
+        headers so the Worker can filter unfit targets for this GPU.
+        On 503 no_feasible_target the caller should wait (see coordinator_cycle).
         """
         path = "/work"
         body_bytes = b""
         for base in self._base_urls():
             url = base + path
             x_auth = _signed_headers(self.keypair, "GET", path, body_bytes, self.worker_name)
+            # Build capability headers (C48)
+            cap_headers: dict = {}
+            if self.gpu_memory_mb > 0:
+                cap_headers["X-GPU-Memory-MB"] = str(self.gpu_memory_mb)
+            if self.gpu_model:
+                cap_headers["X-GPU-Model"] = self.gpu_model
+            if self.miner_version:
+                cap_headers["X-Miner-Version"] = self.miner_version
             try:
-                status, data = _http(url, "GET", body_bytes, x_auth)
+                req = urllib.request.Request(
+                    url,
+                    data=None,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Auth": x_auth,
+                        "User-Agent": MINER_UA,
+                        **cap_headers,
+                    },
+                    method="GET",
+                )
+                with urllib.request.urlopen(req, timeout=20.0) as resp:
+                    raw = resp.read()
+                    status, data = resp.status, json.loads(raw)
                 if status == 200:
                     shards = data.get("shards", [])
-                    # Attach pinned hashes if the coordinator included them
-                    # (C1f: these come from the lease scorer_profile extension)
                     return Lease(
                         lease_id=data["lease_id"],
                         target=data["target"],
@@ -224,10 +266,96 @@ class CoordinatorClient:
                         pinned_receptor_sha256=data.get("pinned_receptor_sha256"),
                         pinned_msa_sha256=data.get("pinned_msa_sha256"),
                     )
+                if status == 503:
+                    err = data.get("error", "")
+                    if err == "no_feasible_target":
+                        # C48: signal to caller — raise so coordinator_cycle can backoff
+                        raise NoFeasibleTargetError(
+                            int(data.get("retry_after", 300))
+                        )
                 log.warning("[COORD] GET /work → %d: %s", status, data.get("error", ""))
+            except NoFeasibleTargetError:
+                raise
+            except urllib.error.HTTPError as e:
+                try:
+                    raw = e.read()
+                    body = json.loads(raw)
+                except Exception:
+                    body = {"error": str(e)}
+                if e.code == 503:
+                    err = body.get("error", "")
+                    if err == "no_feasible_target":
+                        raise NoFeasibleTargetError(body.get("retry_after", 300))
+                log.warning("[COORD] GET /work → %d: %s", e.code, body.get("error", ""))
             except Exception as e:
                 log.warning("[COORD] GET /work from %s failed: %s", base, e)
         return None
+
+    # ------------------------------------------------------------------
+    # POST /leases/{lease_id}/unfit  (C48)
+    # ------------------------------------------------------------------
+
+    def post_unfit(
+        self,
+        lease_id: str,
+        target: str,
+        gpu_memory_mb: int,
+        gpu_model: Optional[str],
+        molecules_attempted: int,
+        error: str,
+        max_retries: int = 5,
+    ) -> bool:
+        """Post an unfit report to the coordinator.
+
+        Called after a systemic GPU OOM: the lease has already been abandoned
+        (lease expiry / abandon flow already handled) so the coordinator releases
+        shards.  This call records the unfit mark so the target is not issued
+        again to this wallet for 7 days.
+
+        Returns True if the report was accepted (200 or 409 duplicate).
+        Returns False if all retries fail (the caller may log and continue — a
+        missing unfit mark is not fatal; the miner will just get OOM'd again).
+        """
+        path = f"/leases/{lease_id}/unfit"
+        body_dict = {
+            "target": target,
+            "reason": "gpu_oom",
+            "gpu_memory_mb": gpu_memory_mb,
+            "gpu_model": gpu_model,
+            "molecules_attempted": molecules_attempted,
+            "error": error[:200],
+        }
+        body_bytes = json.dumps(body_dict, separators=(",", ":")).encode()
+
+        backoff = 5.0
+        for attempt in range(1, max_retries + 1):
+            x_auth = _signed_headers(self.keypair, "POST", path, body_bytes, self.worker_name)
+            for base in self._base_urls():
+                url = base + path
+                try:
+                    status, data = _http(url, "POST", body_bytes, x_auth)
+                    if status in (200, 201):
+                        log.info("[COORD] ✔ POST %s unfit report accepted", path)
+                        return True
+                    if status == 409:
+                        log.info("[COORD] POST %s 409 duplicate — treating as accepted", path)
+                        return True
+                    if status in (400, 401, 403):
+                        log.warning("[COORD] POST %s %d (non-retriable): %s",
+                                    path, status, data.get("error", ""))
+                        return False
+                    log.warning("[COORD] POST %s %d (attempt %d/%d): %s",
+                                path, status, attempt, max_retries, data.get("error", ""))
+                except Exception as e:
+                    log.warning("[COORD] POST %s network error (attempt %d/%d): %s",
+                                path, attempt, max_retries, e)
+            if attempt < max_retries:
+                log.info("[COORD] unfit report retry in %.0fs", backoff)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 60.0)
+        log.error("[COORD] unfit report failed after %d attempts — target %s unblocked",
+                  max_retries, target)
+        return False
 
     # ------------------------------------------------------------------
     # POST /results (enqueue + drain)

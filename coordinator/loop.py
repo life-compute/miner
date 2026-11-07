@@ -93,6 +93,17 @@ class PerMoleculeError(Exception):
     to this molecule (bad SMILES, conformer, too large, etc.) and not systemic.
     The caller catches this and counts it as a skipped molecule."""
 
+
+class GpuOomError(Exception):
+    """Raised when a scoring subprocess exits due to a GPU out-of-memory error.
+
+    C48: triggers an immediate lease abandon + unfit report to the coordinator
+    so the target is not reissued to this GPU for 7 days.
+    """
+    def __init__(self, reason: str = ""):
+        super().__init__(f"GPU OOM: {reason}")
+        self.reason = reason
+
 # Keywords in scorer stderr/stdout that indicate a per-molecule problem.
 # Any line matching one of these patterns is classified as PerMoleculeError.
 #
@@ -140,6 +151,35 @@ def _is_per_molecule_error(stderr: str, stdout: str) -> tuple[bool, str]:
             for line in combined.splitlines():
                 if pat.lower() in line.lower():
                     return True, line.strip()[:300]
+            return True, pat
+    return False, ""
+
+
+# C48: GPU OOM patterns — these trigger an unfit report and immediate lease abandon.
+# OOM is systemic (not per-molecule) but has a special cause: GPU memory too small.
+_GPU_OOM_PATTERNS = [
+    "CUDA out of memory",
+    "OutOfMemoryError",
+    "cuda out of memory",
+    "out of memory",
+    "GPU memory",
+    "RuntimeError: CUDA",
+    "torch.cuda.OutOfMemoryError",
+]
+
+
+def _is_gpu_oom(stderr: str, stdout: str) -> tuple[bool, str]:
+    """Return (True, reason) when stderr/stdout indicates a GPU OOM failure.
+
+    Distinct from generic systemic failures: these trigger an unfit report
+    (POST /leases/{id}/unfit) so the target is not reissued to this GPU.
+    """
+    combined = stderr + stdout
+    for pat in _GPU_OOM_PATTERNS:
+        if pat.lower() in combined.lower():
+            for line in combined.splitlines():
+                if pat.lower() in line.lower():
+                    return True, line.strip()[:200]
             return True, pat
     return False, ""
 
@@ -389,11 +429,48 @@ def _get_or_create_client(gpu_idx: int = 0) -> "CoordinatorClient":
         coordinator_url=coordinator_url,
         fallback_url=fallback_url,
         worker_name=worker_name,
+        gpu_memory_mb=_detect_gpu_memory_mb_for_client(gpu_idx),
+        gpu_model=_detect_gpu_model_for_client(gpu_idx),
+        miner_version="2.0",
     )
     # C28: drop queued results whose leases have already expired before starting drain
     client.drop_stale_queued_results()
     _CLIENT_CACHE[gpu_idx] = client
     return client
+
+
+def _detect_gpu_memory_mb_for_client(gpu_idx: int) -> int:
+    """Detect GPU memory for the given GPU index (subprocess-safe)."""
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode == 0:
+            lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+            if gpu_idx < len(lines):
+                return int(lines[gpu_idx])
+    except Exception:
+        pass
+    return 0
+
+
+def _detect_gpu_model_for_client(gpu_idx: int) -> Optional[str]:
+    """Detect GPU model name for the given GPU index (subprocess-safe)."""
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name",
+             "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode == 0:
+            lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+            if gpu_idx < len(lines):
+                return lines[gpu_idx][:64]  # cap length
+    except Exception:
+        pass
+    return None
 
 
 # ── Persisted cursor (restart-resume within a lease) ──────────────────────
@@ -685,6 +762,10 @@ def _score_protein(
             raise PerMoleculeError(
                 f"Per-molecule error for {smiles[:40]!r}: {reason}"
             )
+        # C48: check for GPU OOM before generic per-molecule patterns
+        is_oom, oom_reason = _is_gpu_oom(r.stderr, r.stdout)
+        if is_oom:
+            raise GpuOomError(oom_reason)
         # rc=1 or other — also check text patterns (C26/C30):
         # Boltz may print "Failed to process <input>. Skipping." then exit
         # non-zero via the runner's RescoreFailed path; reclassify those as
@@ -783,10 +864,22 @@ def coordinator_cycle(
         return
     _wait_for_backoff(wlog)
 
+    from coordinator.client import NoFeasibleTargetError as _NoFeasibleTargetError
+
     # ── 1. Lease ────────────────────────────────────────────────────────
     wlog.info("[COORD] GET /work …")
     try:
         lease = client.get_work()
+    except _NoFeasibleTargetError as nft:
+        # C48: no feasible target for this GPU — wait and retry later
+        wait = max(nft.retry_after, 60)
+        wlog.info(
+            "[COORD] NO_FEASIBLE_TARGET: all targets unfit for this GPU "
+            "(gpu_memory_mb=%d) — waiting %ds before retry",
+            client.gpu_memory_mb, wait,
+        )
+        time.sleep(wait)
+        return
     except Exception as exc:
         wlog.warning("[COORD] get_work() raised: %s", exc)
         return
@@ -901,6 +994,25 @@ def coordinator_cycle(
                 )
             elif lease.modality == "mrna":
                 raw_score = _score_mrna(smiles, lease.target, wlog)
+        except GpuOomError as oom_err:
+            # C48: systemic GPU OOM → abandon lease immediately + post unfit report
+            wlog.error(
+                "[COORD] GPU_OOM: systemic OOM on target=%s lease=%s shard=%s row=%d "
+                "— abandoning lease and posting unfit report (gpu_memory_mb=%d)",
+                lease.target, lease.lease_id[:12], shard_id, row,
+                client.gpu_memory_mb,
+            )
+            # Post the unfit report (with retry); failures are logged but not fatal
+            client.post_unfit(
+                lease_id=lease.lease_id,
+                target=lease.target,
+                gpu_memory_mb=client.gpu_memory_mb,
+                gpu_model=client.gpu_model,
+                molecules_attempted=scored + skipped_mol + 1,
+                error=oom_err.reason,
+            )
+            # Abandon: stop processing this lease
+            break
         except PerMoleculeError as per_err:
             # C26/C30: per-molecule failure — skip, log reason, do NOT count as systemic
             reason_str = str(per_err)

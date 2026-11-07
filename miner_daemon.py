@@ -1561,7 +1561,39 @@ def _detect_gpu_model(gpu_idx: int = 0) -> str:
     return name
 
 
-# ── On-chain submission ───────────────────────────────────────────────────────
+_GPU_MEMORY_MB_CACHE: dict[int, int] = {}
+
+def _detect_gpu_memory_mb(gpu_idx: int = 0) -> int:
+    """Return total GPU VRAM in MiB for the given GPU index.
+
+    Uses nvidia-smi --query-gpu=memory.total to avoid importing torch in the
+    parent process (same subprocess isolation rationale as _detect_gpu_model).
+
+    Returns 0 on any failure (no nvidia-smi, no GPU, timeout).
+    """
+    if gpu_idx in _GPU_MEMORY_MB_CACHE:
+        return _GPU_MEMORY_MB_CACHE[gpu_idx]
+
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode == 0:
+            lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+            if gpu_idx < len(lines):
+                mb = int(lines[gpu_idx])
+                _GPU_MEMORY_MB_CACHE[gpu_idx] = mb
+                return mb
+    except Exception as e:
+        log.debug(f"[gpu-mem] nvidia-smi failed: {e}")
+
+    _GPU_MEMORY_MB_CACHE[gpu_idx] = 0
+    return 0
+
+
+
 def submit_on_chain(target_id_num: int, smiles: str, affinity: float,
                     boltz_seed: int = BOLTZ_SEED,
                     molecule_type: str = "protein",
